@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
+import { getCurrentUser } from "@/app/lib/auth";
 type Provider = "xai" | "kling";
 
 type GenerateBody = {
