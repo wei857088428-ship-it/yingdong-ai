@@ -1,55 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUser } from "@/app/lib/auth";
+
+type Provider = "xai" | "kling";
+
+type JsonObject = Record<string, any>;
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const apiKey = process.env.XAI_API_KEY;
+    // 1. 验证登录
+    const user = await getCurrentUser();
 
-    if (!apiKey) {
+    if (!user) {
       return NextResponse.json(
-        { error: "服务器没有配置 XAI_API_KEY" },
-        { status: 500 }
+        { error: "请先登录后再查询视频状态" },
+        { status: 401 }
       );
     }
 
-    const requestId = request.nextUrl.searchParams.get("requestId");
+    // 2. 获取参数
+    const providerParam =
+      request.nextUrl.searchParams.get("provider") ?? "xai";
+
+    const provider: Provider =
+      providerParam === "kling" ? "kling" : "xai";
+
+    const requestId =
+      request.nextUrl.searchParams.get("requestId") ||
+      request.nextUrl.searchParams.get("taskId");
 
     if (!requestId) {
       return NextResponse.json(
-        { error: "缺少 requestId" },
+        { error: "缺少 requestId 或 taskId" },
         { status: 400 }
       );
     }
 
-    const response = await fetch(
-      `https://api.x.ai/v1/videos/${encodeURIComponent(requestId)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        cache: "no-store",
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return NextResponse.json(
-        {
-          error:
-            data?.error?.message ||
-            data?.message ||
-            "查询视频状态失败",
-          details: data,
-        },
-        { status: response.status }
-      );
+    // 3. 根据平台查询
+    if (provider === "kling") {
+      return await getKlingVideoStatus(requestId);
     }
 
-    return NextResponse.json({
-      status: data.status,
-      videoUrl: data.video?.url ?? null,
-      video: data.video ?? null,
-    });
+    return await getXaiVideoStatus(requestId);
   } catch (error) {
     console.error("Status API error:", error);
 
@@ -58,4 +52,75 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function getXaiVideoStatus(requestId: string) {
+  const apiKey = process.env.XAI_API_KEY;
+
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "服务器没有配置 XAI_API_KEY" },
+      { status: 500 }
+    );
+  }
+
+  const response = await fetch(
+    `https://api.x.ai/v1/videos/${encodeURIComponent(requestId)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    }
+  );
+
+  const data = (await response.json()) as JsonObject;
+
+  if (!response.ok) {
+    console.error("xAI status query failed:", data);
+
+    return NextResponse.json(
+      {
+        error:
+          data?.error?.message ||
+          data?.message ||
+          "查询 xAI 视频状态失败",
+        details: data,
+      },
+      { status: response.status }
+    );
+  }
+
+  const status = String(data?.status ?? "processing").toLowerCase();
+
+  const videoUrl =
+    data?.video?.url ||
+    data?.video_url ||
+    data?.url ||
+    data?.output?.video_url ||
+    null;
+
+  return NextResponse.json({
+    provider: "xai",
+    requestId,
+    taskId: requestId,
+    status,
+    videoUrl,
+    video: data?.video ?? null,
+    raw: data,
+  });
+}
+
+async function getKlingVideoStatus(taskId: string) {
+  return NextResponse.json(
+    {
+      provider: "kling",
+      taskId,
+      status: "unsupported",
+      error: "Kling 状态查询接口尚未接通，请先使用 xAI 模型测试。",
+    },
+    { status: 501 }
+  );
 }
