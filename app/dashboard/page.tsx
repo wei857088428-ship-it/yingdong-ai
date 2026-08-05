@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 export default function Dashboard() {
+  const router = useRouter();
+
   const [prompt, setPrompt] = useState("");
   const [email, setEmail] = useState("");
-const [credits, setCredits] = useState(0);
+  const [credits, setCredits] = useState(0);
   const [duration, setDuration] = useState("5");
   const [ratio, setRatio] = useState("9:16");
   const [model, setModel] = useState("xai");
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [taskId, setTaskId] = useState("");
 
   useEffect(() => {
   async function loadUser() {
@@ -32,14 +39,65 @@ const [credits, setCredits] = useState(0);
   loadUser();
 }, []);
 
-  function handleGenerate() {
-    if (!prompt.trim()) {
-      alert("请先输入视频提示词");
+  async function handleGenerate() {
+  if (!prompt.trim()) {
+    setMessage("请先输入视频提示词");
+    return;
+  }
+
+  if (model !== "xai" && model !== "kling") {
+    setMessage("目前只接通了 xAI 和 Kling");
+    return;
+  }
+
+  try {
+    setLoading(true);
+    setMessage("正在提交视频生成任务……");
+    setTaskId("");
+
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        provider: model,
+        prompt: prompt.trim(),
+        duration: Number(duration),
+        aspectRatio: ratio,
+        resolution: model === "xai" ? "480p" : "720p",
+      }),
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      setMessage("登录已失效，请重新登录");
+      router.replace("/login");
+      router.refresh();
       return;
     }
 
-    alert("下一步接入真实视频生成和积分扣除");
+    if (!response.ok) {
+      throw new Error(data.error || "生成任务提交失败");
+    }
+
+    const newTaskId = data.taskId || data.requestId;
+
+    if (!newTaskId) {
+      throw new Error("任务提交成功，但没有返回任务 ID");
+    }
+
+    setTaskId(newTaskId);
+    setMessage("视频任务已成功提交，正在生成中……");
+  } catch (error) {
+    setMessage(
+      error instanceof Error ? error.message : "生成失败，请稍后重试"
+    );
+  } finally {
+    setLoading(false);
   }
+}
 
   return (
     <main
@@ -80,7 +138,7 @@ const [credits, setCredits] = useState(0);
               border: "1px solid rgba(148, 163, 184, 0.25)",
             }}
           >
-            💎 当前积分：100
+            💎 当前积分：{credits}
           </div>
         </header>
 
@@ -210,24 +268,49 @@ const [credits, setCredits] = useState(0);
             </div>
 
             <button
-              onClick={handleGenerate}
-              style={{
-                width: "100%",
-                marginTop: "24px",
-                padding: "16px",
-                border: "none",
-                borderRadius: "14px",
-                color: "#ffffff",
-                fontSize: "17px",
-                fontWeight: 700,
-                cursor: "pointer",
-                background:
-                  "linear-gradient(90deg, #7c3aed 0%, #a855f7 52%, #ec4899 100%)",
-                boxShadow: "0 10px 30px rgba(168, 85, 247, 0.35)",
-              }}
-            >
-              立即生成 · 50积分
-            </button>
+  onClick={handleGenerate}
+  disabled={loading}
+  style={{
+    width: "100%",
+    marginTop: "24px",
+    padding: "16px",
+    border: "none",
+    borderRadius: "14px",
+    color: "#ffffff",
+    fontSize: "17px",
+    fontWeight: 700,
+    cursor: loading ? "not-allowed" : "pointer",
+    opacity: loading ? 0.65 : 1,
+    background:
+      "linear-gradient(90deg, #7c3aed 0%, #a855f7 52%, #ec4899 100%)",
+    boxShadow: "0 10px 30px rgba(168, 85, 247, 0.35)",
+  }}
+>
+  {loading ? "正在提交……" : "立即生成 · 50积分"}
+</button>
+{message && (
+  <p
+    style={{
+      marginTop: "14px",
+      color: message.includes("失败") ? "#f87171" : "#c4b5fd",
+    }}
+  >
+    {message}
+  </p>
+)}
+
+{taskId && (
+  <p
+    style={{
+      marginTop: "8px",
+      color: "#94a3b8",
+      fontSize: "13px",
+      wordBreak: "break-all",
+    }}
+  >
+    任务 ID：{taskId}
+  </p>
+)}
           </div>
 
           <div
