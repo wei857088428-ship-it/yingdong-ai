@@ -82,7 +82,7 @@ export default function StoryboardPage() {
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `${currentTitle || "影动AI分镜"}.srt`; link.click(); URL.revokeObjectURL(url); setStatus("SRT 字幕已导出");
   }
 
-  function sendToStudio(prompt: string, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt, mode })); router.push("/dashboard"); }
+  function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId })); router.push("/dashboard"); }
 
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
@@ -111,7 +111,7 @@ export default function StoryboardPage() {
             <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
             <h3>{shot.scene}</h3><p><b>动作</b>{shot.action}</p>{shot.dialogue && <p><b>对白/字幕</b>{shot.dialogue}</p>}{shot.error_message && <p className="shot-error"><b>错误</b>{shot.error_message}</p>}
             <details><summary>查看生成提示词</summary><div><b>图片</b><p>{shot.image_prompt}</p><b>视频</b><p>{shot.video_prompt}</p></div></details>
-            <div className="shot-actions"><button onClick={() => sendToStudio(shot.image_prompt,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot.video_prompt,"video")}>单镜视频 ↗</button></div>
+            <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button></div>
           </article>)}</div>
         </div>}
       </div>
