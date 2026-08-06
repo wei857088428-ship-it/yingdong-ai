@@ -1,14 +1,16 @@
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 
-export type UsageKind = "chat" | "image" | "video";
+export type UsageKind = "chat" | "image" | "video" | "audio";
 const policy: Record<UsageKind, { cost: number; limit: number; window: number }> = {
   chat: { cost: 1, limit: 20, window: 60 },
   image: { cost: 20, limit: 4, window: 60 },
   video: { cost: 80, limit: 2, window: 300 },
+  audio: { cost: 2, limit: 30, window: 60 },
 };
 const batchPolicy: Partial<Record<UsageKind, { cost: number; limit: number; window: number }>> = {
   image: { cost: 20, limit: 30, window: 3600 },
   video: { cost: 80, limit: 20, window: 3600 },
+  audio: { cost: 2, limit: 100, window: 3600 },
 };
 
 export async function reserveUsage(userId: string, kind: UsageKind, batch = false) {
