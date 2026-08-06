@@ -110,7 +110,7 @@ export default function Dashboard() {
       <aside className="sidebar">
         <Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link>
         <button className="new-chat" onClick={newConversation}>＋ 新建创作</button>
-        <nav className="side-nav"><button className="active">✦ 当前会话</button><button onClick={() => setMode("image")}>▧ 图片创作</button><button onClick={() => setMode("video")}>▷ 视频创作</button></nav>
+        <nav className="side-nav"><button className="active">✦ 当前会话</button><button onClick={() => setMode("image")}>▧ 图片创作</button><button onClick={() => setMode("video")}>▷ 视频创作</button><Link href="/admin">⌁ 运营后台</Link></nav>
         <div className="recent"><p>最近使用</p><span>AI 漫剧创作助手</span><span>短视频脚本策划</span></div>
         <div className="account"><div className="avatar">{email.slice(0, 1).toUpperCase() || "Y"}</div><div><b>{email.split("@")[0] || "创作者"}</b><small>{credits} 积分</small></div><button onClick={signOut} title="退出登录">↗</button></div>
       </aside>
