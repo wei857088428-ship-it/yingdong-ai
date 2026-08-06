@@ -1,11 +1,12 @@
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 
 type CharacterImages = { front?: string; left?: string; right?: string; full?: string };
 export type CharacterRecord = { id: string; name: string; description: string; version: number; images: CharacterImages };
 
 export async function getCharacter(userId: string, characterId?: string) {
   if (!characterId) return null;
-  const { data } = await supabaseAdmin.from("characters").select("id,name,description,version,images").eq("id", characterId).eq("user_id", userId).maybeSingle();
+  const supabase = await createServerSupabaseClient();
+  const { data } = await supabase.from("characters").select("id,name,description,version,images").eq("id", characterId).eq("user_id", userId).maybeSingle();
   return data as CharacterRecord | null;
 }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage } from "@/app/lib/usage";
 
 type Provider = "xai" | "kling";
@@ -66,6 +66,7 @@ export async function GET(request: NextRequest) {
 }
 
 async function getXaiVideoStatus(requestId: string, userId: string) {
+  const supabase = await createServerSupabaseClient();
   const apiKey = process.env.XAI_API_KEY;
 
   if (!apiKey) {
@@ -113,19 +114,19 @@ async function getXaiVideoStatus(requestId: string, userId: string) {
     data?.output?.video_url ||
     null;
 
-  const { data: work } = await supabaseAdmin.from("works").select("id,conversation_id,usage_event_id,status").eq("provider_task_id", requestId).eq("user_id", userId).maybeSingle();
+  const { data: work } = await supabase.from("works").select("id,conversation_id,usage_event_id,status").eq("provider_task_id", requestId).eq("user_id", userId).maybeSingle();
   if (work && work.status === "processing" && status === "done" && videoUrl) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, true) : null;
     await Promise.all([
-      supabaseAdmin.from("works").update({ status: "completed", url: videoUrl, updated_at: new Date().toISOString() }).eq("id", work.id),
-      supabaseAdmin.from("messages").insert({ conversation_id: work.conversation_id, user_id: userId, role: "assistant", content: "视频已经生成完成。", media_url: videoUrl, media_type: "video" }),
-      supabaseAdmin.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", work.conversation_id),
+      supabase.from("works").update({ status: "completed", url: videoUrl, updated_at: new Date().toISOString() }).eq("id", work.id),
+      supabase.from("messages").insert({ conversation_id: work.conversation_id, user_id: userId, role: "assistant", content: "视频已经生成完成。", media_url: videoUrl, media_type: "video" }),
+      supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", work.conversation_id),
     ]);
     return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status, progress: data?.progress ?? null, videoUrl, credits });
   }
   if (work && work.status === "processing" && ["failed", "expired"].includes(status)) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, false) : null;
-    await supabaseAdmin.from("works").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", work.id);
+    await supabase.from("works").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", work.id);
     return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status, progress: data?.progress ?? null, videoUrl, credits });
   }
 
