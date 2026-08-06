@@ -14,13 +14,13 @@ export default function StoryboardPage() {
   const router = useRouter();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
-  const [currentTitle, setCurrentTitle] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("orion"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
+  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("orion"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => { if (!data.user) { router.replace("/login"); return; } const [response, characterResult] = await Promise.all([fetch("/api/storyboard", { cache: "no-store" }), supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false })]); if (response.ok) setProjects((await response.json()).projects); setCharacters((characterResult.data ?? []) as Character[]); }); }, [router]);
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
-    try { const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, story, shotCount: Number(shotCount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setCurrentTitle(data.project.title); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]); setStatus(`已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`); }
+    try { const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, story, shotCount: Number(shotCount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]); setStatus(`已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
 
@@ -72,7 +72,7 @@ export default function StoryboardPage() {
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
     <section className="storyboard-layout">
-      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); }}>{project.title}<small>{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
+      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); setCurrentProjectId(project.id); }}>{project.title}<small>{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
       <div className="storyboard-main">
         <div className="storyboard-head"><p className="eyebrow">NOVEL TO STORYBOARD</p><h1>小说一键拆分镜</h1><p>粘贴一章小说，自动拆镜并批量生成整集图片、视频、配音与字幕。</p></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
@@ -87,7 +87,7 @@ export default function StoryboardPage() {
             <button disabled={batching} onClick={batchVoices}>批量生成配音 · {shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length} 镜</button>
             <button disabled={batching} onClick={exportSrt}>导出 SRT 字幕</button>
           </div>
-          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span></div>
+          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
           <div className="shot-list">{shots.map((shot) => <article key={shot.shot_number}>
             {shot.image_url && <Image className="shot-preview" src={shot.image_url} alt={`镜头${shot.shot_number}`} width={600} height={1067} unoptimized/>}
             {shot.video_url && <video className="shot-preview" src={shot.video_url} controls playsInline/>}
