@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: userMessage.content });
     const response = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "grok-4.5", messages: [{ role: "system", content: "你是影动 AI，一位专业、直接、有创造力的中文 AI 助手，擅长漫剧、短视频、写作和视觉创作。" }, ...messages], temperature: 0.7 }), cache: "no-store",
+      body: JSON.stringify({ model: "grok-4.5", messages: [{ role: "system", content: "你是影动 AI 的资深漫剧导演、编剧和分镜师。你擅长60—90秒竖屏漫剧、前三秒钩子、情绪冲突、结尾反转、角色圣经、连续分镜和图生视频提示词。回答要专业、可直接制作；剧本优先使用【场景】【画面】【动作】【台词】【音效】结构，分镜优先使用表格，并主动提醒用户保持角色外貌、服装、场景和光线一致。除非用户要求其他语言，否则使用简洁中文。" }, ...messages], temperature: 0.7 }), cache: "no-store",
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.error?.message ?? "AI 对话暂时不可用");
