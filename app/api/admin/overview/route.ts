@@ -23,7 +23,12 @@ export async function GET() {
 
   const managementKey = process.env.XAI_MANAGEMENT_API_KEY;
   const teamId = process.env.XAI_TEAM_ID;
-  const { data: profiles, error: profilesError } = await supabaseAdmin.from("profiles").select("credits");
+  const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+  const [{ data: profiles, error: profilesError }, { data: usage }, { count: worksToday }] = await Promise.all([
+    supabaseAdmin.from("profiles").select("credits"),
+    supabaseAdmin.from("usage_events").select("kind,credits,status").gte("created_at", dayStart.toISOString()),
+    supabaseAdmin.from("works").select("id", { count: "exact", head: true }).gte("created_at", dayStart.toISOString()),
+  ]);
   const profileRows = profiles ?? [];
   const totalCredits = profileRows.reduce((sum, profile) => sum + Number(profile.credits ?? 0), 0);
   let prepaidBalance: number | null = null;
@@ -50,7 +55,7 @@ export async function GET() {
 
   return NextResponse.json({
     xai: { configured: Boolean(managementKey && teamId), prepaidBalance, monthSpend, spendingLimit, error: xaiError },
-    site: { users: profileRows.length, totalCredits, profilesError: profilesError?.message ?? null },
+    site: { users: profileRows.length, totalCredits, requestsToday: usage?.length ?? 0, creditsToday: (usage ?? []).filter((item) => item.status !== "refunded").reduce((sum, item) => sum + Number(item.credits), 0), worksToday: worksToday ?? 0, profilesError: profilesError?.message ?? null },
     updatedAt: new Date().toISOString(),
   });
 }
