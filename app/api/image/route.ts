@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { characterPrompt, getCharacter } from "@/app/lib/characters";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录后再生成图片" }, { status: 401 });
+  const supabase = await createServerSupabaseClient();
   const apiKey = process.env.XAI_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 500 });
   let eventId = "";
@@ -16,11 +17,11 @@ export async function POST(request: Request) {
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
     if (!conversationId) {
-      const { data, error } = await supabaseAdmin.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "image" }).select("id").single();
+      const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "image" }).select("id").single();
       if (error) throw error; conversationId = data.id;
     }
     const usage = await reserveUsage(user.id, "image", body.batch === true); eventId = usage.eventId;
-    await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
+    await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const character = await getCharacter(user.id, body.characterId);
     const finalPrompt = prompt + characterPrompt(character);
     const response = await fetch("https://api.x.ai/v1/images/generations", {
@@ -34,9 +35,9 @@ export async function POST(request: Request) {
     const credits = await finishUsage(user.id, eventId, true);
     const content = "图片已经生成，可以打开或下载保存。";
     await Promise.all([
-      supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "assistant", content, media_url: imageUrl, media_type: "image" }),
-      supabaseAdmin.from("works").insert({ user_id: user.id, conversation_id: conversationId, type: "image", prompt, url: imageUrl, status: "completed" }),
-      supabaseAdmin.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId).eq("user_id", user.id),
+      supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "assistant", content, media_url: imageUrl, media_type: "image" }),
+      supabase.from("works").insert({ user_id: user.id, conversation_id: conversationId, type: "image", prompt, url: imageUrl, status: "completed" }),
+      supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId).eq("user_id", user.id),
     ]);
     return NextResponse.json({ imageUrl, conversationId, credits });
   } catch (error) {
