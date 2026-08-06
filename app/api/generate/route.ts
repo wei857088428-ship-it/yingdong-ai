@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
+import { characterPrompt, getCharacter } from "@/app/lib/characters";
 
-type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string };
+type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string };
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -25,7 +26,8 @@ export async function POST(request: Request) {
     }
     const usage = await reserveUsage(user.id, "video"); eventId = usage.eventId;
     await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
-    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt, duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
+    const character = await getCharacter(user.id, body.characterId);
+    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + characterPrompt(character), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
     if (body.image) requestBody.image = { url: body.image };
     const response = await fetch("https://api.x.ai/v1/videos/generations", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(requestBody), cache: "no-store" });
     const data = await response.json();
