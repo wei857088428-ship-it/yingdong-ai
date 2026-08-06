@@ -6,9 +6,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
-type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null };
+type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; storyboard_shots: Shot[] };
-type Character = { id: string; name: string; version: number };
+type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
 
 export default function StoryboardPage() {
   const router = useRouter();
@@ -21,7 +21,7 @@ export default function StoryboardPage() {
     const requestedId = new URLSearchParams(window.location.search).get("project");
     const [response, characterResult, requestedResponse] = await Promise.all([
       fetch("/api/storyboard", { cache: "no-store" }),
-      supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false }),
+      supabase.from("characters").select("id,name,version,voice_id,voice_language").order("updated_at", { ascending: false }),
       requestedId ? fetch(`/api/storyboard/projects/${requestedId}`, { cache: "no-store" }) : Promise.resolve(null),
     ]);
     const loadedProjects = response.ok ? (await response.json()).projects as Project[] : [];
@@ -85,7 +85,8 @@ export default function StoryboardPage() {
     for (let index = 0; index < pending.length; index++) {
       const shot = pending[index]; setStatus(`正在生成配音 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`);
       try {
-        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId, language: voiceLanguage, batch: true }) });
+        const speaker = characters.find((character) => character.id === shot.speaker_character_id);
+        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error);
         setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item));
       } catch (error) { setStatus(error instanceof Error ? error.message : "配音生成失败"); }
@@ -128,7 +129,7 @@ export default function StoryboardPage() {
             {shot.video_url && <video className="shot-preview" src={shot.video_url} controls playsInline/>}
             {shot.audio_url && <audio className="shot-audio" src={shot.audio_url} controls/>}
             <div className="shot-number">镜头 {String(shot.shot_number).padStart(2,"0")}<b>{shot.duration_seconds}s</b></div>
-            <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
+            <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.speaker_character_id && <span>对白：{characters.find((character) => character.id === shot.speaker_character_id)?.name}</span>}{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
             <h3>{shot.scene}</h3><p><b>动作</b>{shot.action}</p>{shot.dialogue && <p><b>对白/字幕</b>{shot.dialogue}</p>}{shot.error_message && <p className="shot-error"><b>错误</b>{shot.error_message}</p>}
             {missingCharacterNames(shot).length > 0 && <div className="missing-characters"><b>缺少角色设定</b>{missingCharacterNames(shot).map((name) => <Link key={name} href={`/characters?name=${encodeURIComponent(name)}`}>创建 {name} →</Link>)}</div>}
             <details><summary>绑定镜头角色 · {effectiveCharacterIds(shot).length} 人</summary><div>{characters.map((character) => <label key={character.id}><input type="checkbox" checked={effectiveCharacterIds(shot).includes(character.id)} onChange={(event) => void toggleShotCharacter(shot, character.id, event.target.checked)}/>{character.name} V{character.version}</label>)}</div></details>
