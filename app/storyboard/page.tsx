@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
-type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string };
+type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; storyboard_shots: Shot[] };
 type Character = { id: string; name: string; version: number };
 
@@ -39,7 +39,15 @@ export default function StoryboardPage() {
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
 
-  async function updateShot(id: string, body: Record<string, string>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error((await response.json()).error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, image_url: body.imageUrl ?? shot.image_url, video_url: body.videoUrl ?? shot.video_url, media_status: body.status ?? shot.media_status, error_message: body.error } : shot)); }
+  async function updateShot(id: string, body: Record<string, string | string[] | null>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error((await response.json()).error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, image_url: typeof body.imageUrl === "string" ? body.imageUrl : shot.image_url, video_url: typeof body.videoUrl === "string" ? body.videoUrl : shot.video_url, media_status: typeof body.status === "string" ? body.status : shot.media_status, error_message: typeof body.error === "string" ? body.error : shot.error_message, character_ids: Array.isArray(body.characterIds) ? body.characterIds : body.characterIds === null ? null : shot.character_ids } : shot)); }
+
+  const effectiveCharacterIds = (shot: Shot) => Array.isArray(shot.character_ids) ? shot.character_ids : characterId ? [characterId] : [];
+
+  async function toggleShotCharacter(shot: Shot, id: string, checked: boolean) {
+    const current = effectiveCharacterIds(shot); const next = checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
+    await updateShot(shot.id, { characterIds: next });
+    setStatus(`镜头 ${shot.shot_number} 已绑定 ${next.length} 个角色`);
+  }
 
   async function bindCharacter(nextCharacterId: string) {
     if (!currentProjectId) return;
@@ -56,7 +64,7 @@ export default function StoryboardPage() {
     const pending = shots.filter((shot) => !shot.image_url); if (!pending.length) return setStatus("所有镜头都已有图片");
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
-    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterId: characterId || undefined, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
+    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
     setBatching(false); setStatus("批量图片生成完成");
   }
 
@@ -64,7 +72,7 @@ export default function StoryboardPage() {
     const pending = shots.filter((shot) => shot.image_url && !shot.video_url); if (!pending.length) return setStatus("没有等待转视频的分镜图片");
     if (!window.confirm(`将生成 ${pending.length} 段视频，预计消耗 ${pending.length * 80} 积分。过程可能需要较长时间，确定继续吗？`)) return;
     setBatching(true);
-    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成视频 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "video_generating", error: "" }); const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: shot.video_prompt, image: shot.image_url, duration: Math.min(15, shot.duration_seconds), aspectRatio: "9:16", resolution: "480p", characterId: characterId || undefined, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); let videoUrl = ""; for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 5000)); const check = await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`, { cache: "no-store" }); const detail = await check.json(); if (!check.ok) throw new Error(detail.error); if (detail.status === "done") { videoUrl = detail.videoUrl; break; } if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，积分已退还"); } if (!videoUrl) throw new Error("视频仍在处理中，请稍后重试"); await updateShot(shot.id, { videoUrl, status: "completed", error: "" }); } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "视频生成失败" }); } }
+    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成视频 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "video_generating", error: "" }); const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: shot.video_prompt, image: shot.image_url, duration: Math.min(15, shot.duration_seconds), aspectRatio: "9:16", resolution: "480p", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); let videoUrl = ""; for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 5000)); const check = await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`, { cache: "no-store" }); const detail = await check.json(); if (!check.ok) throw new Error(detail.error); if (detail.status === "done") { videoUrl = detail.videoUrl; break; } if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，积分已退还"); } if (!videoUrl) throw new Error("视频仍在处理中，请稍后重试"); await updateShot(shot.id, { videoUrl, status: "completed", error: "" }); } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "视频生成失败" }); } }
     setBatching(false); setStatus("批量视频生成完成");
   }
 
@@ -93,7 +101,7 @@ export default function StoryboardPage() {
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `${currentTitle || "影动AI分镜"}.srt`; link.click(); URL.revokeObjectURL(url); setStatus("SRT 字幕已导出");
   }
 
-  function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterId })); router.push("/dashboard"); }
+  function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterIds: effectiveCharacterIds(shot) })); router.push("/dashboard"); }
 
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
@@ -121,6 +129,7 @@ export default function StoryboardPage() {
             <div className="shot-number">镜头 {String(shot.shot_number).padStart(2,"0")}<b>{shot.duration_seconds}s</b></div>
             <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
             <h3>{shot.scene}</h3><p><b>动作</b>{shot.action}</p>{shot.dialogue && <p><b>对白/字幕</b>{shot.dialogue}</p>}{shot.error_message && <p className="shot-error"><b>错误</b>{shot.error_message}</p>}
+            <details><summary>绑定镜头角色 · {effectiveCharacterIds(shot).length} 人</summary><div>{characters.map((character) => <label key={character.id}><input type="checkbox" checked={effectiveCharacterIds(shot).includes(character.id)} onChange={(event) => void toggleShotCharacter(shot, character.id, event.target.checked)}/>{character.name} V{character.version}</label>)}</div></details>
             <details><summary>查看生成提示词</summary><div><b>图片</b><p>{shot.image_prompt}</p><b>视频</b><p>{shot.video_prompt}</p></div></details>
             <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button></div>
           </article>)}</div>

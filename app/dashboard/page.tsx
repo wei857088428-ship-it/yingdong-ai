@@ -11,7 +11,7 @@ type Message = { role: "user" | "assistant"; content: string; imageUrl?: string;
 type Conversation = { id: string; title: string; mode: Mode; updated_at: string };
 type Work = { id: string; type: "image" | "video"; prompt: string; url: string | null; status: string; created_at: string };
 type Character = { id: string; name: string; description: string; version: number; images: { front?: string; left?: string; right?: string; full?: string } };
-type StoryboardTarget = { shotId: string; projectId: string; mode: "image" | "video" };
+type StoryboardTarget = { shotId: string; projectId: string; mode: "image" | "video"; characterIds?: string[] };
 
 const starters = ["帮我策划一部三集悬疑漫剧", "写一个有反转的短视频脚本", "生成国漫电影感角色海报", "把这张图片变成动态镜头"];
 const manjuSteps: Array<{ step: string; title: string; detail: string; status: "available" | "next" | "planned"; mode: Mode; prompt: string }> = [
@@ -65,7 +65,7 @@ export default function Dashboard() {
       const { data: characterRows } = await supabase.from("characters").select("id,name,description,version,images").order("updated_at", { ascending: false });
       setCharacters((characterRows ?? []) as Character[]);
       const draft = localStorage.getItem("yingdong-studio-draft");
-      if (draft) { try { const parsed = JSON.parse(draft) as { prompt?: string; mode?: Mode; shotId?: string; projectId?: string; characterId?: string }; if (parsed.prompt) setPrompt(parsed.prompt); if (parsed.mode) setMode(parsed.mode); if (parsed.characterId) setSelectedCharacterId(parsed.characterId); if (parsed.shotId && parsed.projectId && (parsed.mode === "image" || parsed.mode === "video")) setStoryboardTarget({ shotId: parsed.shotId, projectId: parsed.projectId, mode: parsed.mode }); setPanel("create"); } finally { localStorage.removeItem("yingdong-studio-draft"); } }
+      if (draft) { try { const parsed = JSON.parse(draft) as { prompt?: string; mode?: Mode; shotId?: string; projectId?: string; characterId?: string; characterIds?: string[] }; if (parsed.prompt) setPrompt(parsed.prompt); if (parsed.mode) setMode(parsed.mode); if (parsed.characterId) setSelectedCharacterId(parsed.characterId); if (parsed.shotId && parsed.projectId && (parsed.mode === "image" || parsed.mode === "video")) setStoryboardTarget({ shotId: parsed.shotId, projectId: parsed.projectId, mode: parsed.mode, characterIds: parsed.characterIds }); setPanel("create"); } finally { localStorage.removeItem("yingdong-studio-draft"); } }
     });
   }, [router]);
 
@@ -100,12 +100,12 @@ export default function Dashboard() {
         const data = await response.json(); if (response.status === 401) return router.replace("/login"); if (!response.ok) throw new Error(data.error || "对话失败");
         setConversationId(data.conversationId); setCredits(data.credits); setMessages([...nextMessages, { role: "assistant", content: data.content }]);
       } else if (mode === "image") {
-        const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, aspectRatio: ratio, conversationId, characterId: selectedCharacterId || undefined }) });
+        const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, aspectRatio: ratio, conversationId, characterIds: storyboardTarget?.characterIds?.length ? storyboardTarget.characterIds : selectedCharacterId ? [selectedCharacterId] : undefined }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error || "图片生成失败");
         if (storyboardTarget?.mode === "image") { const saveResponse = await fetch(`/api/storyboard/shots/${storyboardTarget.shotId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: data.imageUrl, status: "image_ready", error: "" }) }); if (!saveResponse.ok) throw new Error((await saveResponse.json()).error || "图片已生成，但写回分镜失败"); }
         setConversationId(data.conversationId); setCredits(data.credits); setMessages([...nextMessages, { role: "assistant", content: storyboardTarget ? "图片已经生成并保存到对应分镜。" : "图片已经生成，可以打开或下载保存。", imageUrl: data.imageUrl }]); setStoryboardTarget(null);
       } else {
-        const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: text, image: imageData || undefined, duration: Number(duration), aspectRatio: ratio, resolution, conversationId, characterId: selectedCharacterId || undefined }) });
+        const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: text, image: imageData || undefined, duration: Number(duration), aspectRatio: ratio, resolution, conversationId, characterIds: storyboardTarget?.characterIds?.length ? storyboardTarget.characterIds : selectedCharacterId ? [selectedCharacterId] : undefined }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error || "视频任务提交失败");
         setConversationId(data.conversationId); setCredits(data.credits);
         for (let attempt = 0; attempt < 120; attempt++) {

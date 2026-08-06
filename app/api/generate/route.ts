@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
-import { characterPrompt, getCharacter } from "@/app/lib/characters";
+import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 
-type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; batch?: boolean };
+type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; characterIds?: string[]; batch?: boolean };
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -27,8 +27,8 @@ export async function POST(request: Request) {
     }
     const usage = await reserveUsage(user.id, "video", body.batch === true); eventId = usage.eventId;
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
-    const character = await getCharacter(user.id, body.characterId);
-    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + characterPrompt(character), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
+    const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
+    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + charactersPrompt(characters), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
     if (body.image) requestBody.image = { url: body.image };
     const response = await fetch("https://api.x.ai/v1/videos/generations", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(requestBody), cache: "no-store" });
     const data = await response.json();
