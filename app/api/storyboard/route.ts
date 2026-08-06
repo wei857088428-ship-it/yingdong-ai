@@ -60,8 +60,15 @@ export async function POST(request: Request) {
   const supabase = await createServerSupabaseClient();
   let eventId = "";
   try {
-    const body = (await request.json()) as { title?: string; story?: string; shotCount?: number };
-    const story = body.story?.trim(); const shotCount = Math.min(30, Math.max(6, Number(body.shotCount ?? 12)));
+    const body = (await request.json()) as { title?: string; story?: string; shotCount?: number; continueFromProjectId?: string };
+    let story = body.story?.trim() ?? ""; let parentProjectId: string | null = null; const shotCount = Math.min(30, Math.max(6, Number(body.shotCount ?? 12)));
+    if (body.continueFromProjectId) {
+      const { data: previous } = await supabase.from("storyboard_projects").select("id,title,source_text,storyboard_shots(shot_number,scene,action,dialogue)").eq("id", body.continueFromProjectId).eq("user_id", user.id).maybeSingle();
+      if (!previous) return NextResponse.json({ error: "没有找到要续写的上一集" }, { status: 404 });
+      const ending = (previous.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number).slice(-4).map((shot) => `镜头${shot.shot_number}：${shot.scene}；${shot.action}${shot.dialogue ? `；对白：${shot.dialogue}` : ""}`).join("\n");
+      story = `请续写《${previous.title}》的下一集。保持原世界观、人物关系、身份、服装与时间线连续，承接上一集结尾，推进一个新的冲突，并在结尾留下更强悬念。\n\n上一集原始剧情：\n${String(previous.source_text ?? "").slice(-6000)}\n\n上一集结尾分镜：\n${ending}`;
+      parentProjectId = previous.id;
+    }
     if (!story || story.length < 30) return NextResponse.json({ error: "请粘贴至少30字的小说或剧情" }, { status: 400 });
     const apiKey = process.env.XAI_API_KEY; if (!apiKey) throw new Error("AI 服务尚未配置");
     const { data: characterRows } = await supabase.from("characters").select("id,name,version").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30);
@@ -86,7 +93,7 @@ export async function POST(request: Request) {
       speaker_character_id: matchCharacterId(String(shot.speaker_name ?? ""), characters),
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
-    const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
+    const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story, parent_project_id: parentProjectId }).select("id,title,created_at,parent_project_id").single();
     if (projectError) throw projectError;
     const { data: savedShots, error: shotError } = await supabase.from("storyboard_shots").insert(shots.map((shot) => ({ ...shot, project_id: project.id, user_id: user.id }))).select("*").order("shot_number");
     if (shotError) throw shotError;
