@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
-type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[] };
+type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string };
 type Character = { id: string; name: string; version: number };
 
 const shotProperties = {
@@ -13,6 +13,7 @@ const shotProperties = {
   action: { type: "string" }, dialogue: { type: "string" }, sound: { type: "string" },
   image_prompt: { type: "string" }, video_prompt: { type: "string" },
   character_names: { type: "array", items: { type: "string" }, maxItems: 6 },
+  speaker_name: { type: "string" },
 };
 
 function normalizeName(value: string) {
@@ -26,6 +27,11 @@ function matchCharacterIds(names: string[], characters: Character[]) {
 
 function cleanCharacterNames(names: string[]) {
   return [...new Set(names.map((name) => String(name).trim()).filter(Boolean))].slice(0, 6);
+}
+
+function matchCharacterId(name: string, characters: Character[]) {
+  const requested = normalizeName(name);
+  return characters.find((character) => normalizeName(character.name) === requested)?.id ?? null;
 }
 
 function storyboardSchema(shotCount: number) {
@@ -64,7 +70,7 @@ export async function POST(request: Request) {
       ? characters.map((character) => `${character.name} V${character.version}`).join("、")
       : "暂无已创建角色";
     const usage = await reserveUsage(user.id, "chat"); eventId = usage.eventId;
-    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。当前用户角色库：${characterCatalog}。每个镜头的 character_names 填写画面中确实出现的剧情角色姓名，不要填写版本号、群演或泛称。已有角色必须使用角色库中的准确名称；剧情需要但角色库没有的人物也要保留原姓名，供用户补建角色。没有具名角色时返回空数组。` }, { role: "user", content: story }] }) });
+    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。当前用户角色库：${characterCatalog}。每个镜头的 character_names 填写画面中确实出现的剧情角色姓名，不要填写版本号、群演或泛称。已有角色必须使用角色库中的准确名称；剧情需要但角色库没有的人物也要保留原姓名，供用户补建角色。没有具名角色时返回空数组。speaker_name 填写 dialogue 的说话角色准确姓名；旁白、无人说话或无法确定时填空字符串。` }, { role: "user", content: story }] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "分镜生成失败");
     const parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
     const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => {
@@ -77,6 +83,7 @@ export async function POST(request: Request) {
       image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
+      speaker_character_id: matchCharacterId(String(shot.speaker_name ?? ""), characters),
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
     const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
