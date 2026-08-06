@@ -35,7 +35,7 @@ export default function StoryboardPage() {
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
-    try { const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, story, shotCount: Number(shotCount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]); setStatus(`已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`); }
+    try { const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, story, shotCount: Number(shotCount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]); const bound = data.shots.filter((shot: Shot) => shot.character_ids?.length).length; setStatus(`已生成 ${data.shots.length} 个镜头，自动绑定角色 ${bound} 镜，剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
 
