@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string };
@@ -12,12 +12,11 @@ type Character = { id: string; name: string; version: number };
 
 export default function StoryboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
   const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("orion"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
 
-  useEffect(() => { supabase.auth.getUser().then(async ({ data }) => { if (!data.user) { router.replace("/login"); return; } const [response, characterResult] = await Promise.all([fetch("/api/storyboard", { cache: "no-store" }), supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false })]); if (response.ok) { const loadedProjects = (await response.json()).projects as Project[]; setProjects(loadedProjects); const requestedId = searchParams.get("project"); const selected = loadedProjects.find((project) => project.id === requestedId) ?? loadedProjects[0]; if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); } } setCharacters((characterResult.data ?? []) as Character[]); }); }, [router, searchParams]);
+  useEffect(() => { supabase.auth.getUser().then(async ({ data }) => { if (!data.user) { router.replace("/login"); return; } const [response, characterResult] = await Promise.all([fetch("/api/storyboard", { cache: "no-store" }), supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false })]); if (response.ok) { const loadedProjects = (await response.json()).projects as Project[]; setProjects(loadedProjects); const requestedId = new URLSearchParams(window.location.search).get("project"); const selected = loadedProjects.find((project) => project.id === requestedId) ?? loadedProjects[0]; if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); } } setCharacters((characterResult.data ?? []) as Character[]); }); }, [router]);
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
