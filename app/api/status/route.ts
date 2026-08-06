@@ -3,7 +3,16 @@ import { getCurrentUser } from "@/app/lib/auth";
 
 type Provider = "xai" | "kling";
 
-type JsonObject = Record<string, any>;
+type JsonObject = {
+  error?: { message?: string };
+  message?: string;
+  status?: string;
+  progress?: number;
+  video?: { url?: string };
+  video_url?: string;
+  url?: string;
+  output?: { video_url?: string };
+};
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +42,7 @@ export async function GET(request: NextRequest) {
 
     if (!requestId) {
       return NextResponse.json(
-        { error: "缺少 requestId 或 taskId" },
+        { error: "缺少视频任务 ID" },
         { status: 400 }
       );
     }
@@ -48,7 +57,7 @@ export async function GET(request: NextRequest) {
     console.error("Status API error:", error);
 
     return NextResponse.json(
-      { error: "服务器发生错误，请稍后重试" },
+      { error: "查询视频状态时发生错误，请稍后重试" },
       { status: 500 }
     );
   }
@@ -59,7 +68,7 @@ async function getXaiVideoStatus(requestId: string) {
 
   if (!apiKey) {
     return NextResponse.json(
-      { error: "服务器没有配置 XAI_API_KEY" },
+      { error: "AI 视频服务尚未配置" },
       { status: 500 }
     );
   }
@@ -107,6 +116,7 @@ async function getXaiVideoStatus(requestId: string) {
     requestId,
     taskId: requestId,
     status,
+    progress: data?.progress ?? null,
     videoUrl,
     video: data?.video ?? null,
     raw: data,
@@ -119,7 +129,7 @@ async function getKlingVideoStatus(taskId: string) {
       provider: "kling",
       taskId,
       status: "unsupported",
-      error: "Kling 状态查询接口尚未接通，请先使用 xAI 模型测试。",
+      error: "Kling 状态查询接口尚未接通，请先使用 xAI 视频。",
     },
     { status: 501 }
   );

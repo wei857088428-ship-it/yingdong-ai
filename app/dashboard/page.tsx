@@ -1,363 +1,135 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import Image from "next/image";
 import { supabase } from "../lib/supabase";
+
+type Mode = "chat" | "image" | "video";
+type Message = { role: "user" | "assistant"; content: string; imageUrl?: string; videoUrl?: string };
+
+const starters = ["帮我策划一部三集悬疑漫剧", "写一个有反转的短视频脚本", "生成国漫电影感角色海报", "把这张图片变成动态镜头"];
+
 export default function Dashboard() {
   const router = useRouter();
-
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<Mode>("chat");
   const [prompt, setPrompt] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
   const [email, setEmail] = useState("");
   const [credits, setCredits] = useState(0);
   const [duration, setDuration] = useState("5");
   const [ratio, setRatio] = useState("9:16");
-  const [model, setModel] = useState("xai");
-
+  const [resolution, setResolution] = useState("480p");
+  const [imageData, setImageData] = useState("");
+  const [imageName, setImageName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [taskId, setTaskId] = useState("");
+  const [status, setStatus] = useState("");
 
   useEffect(() => {
-  async function loadUser() {
-    const { data } = await supabase.auth.getUser();
-
-    if (!data.user) return;
-
-    setEmail(data.user.email || "");
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("credits")
-      .eq("id", data.user.id)
-      .single();
-
-    if (profile) {
-      setCredits(profile.credits);
+    async function loadUser() {
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) { router.replace("/login"); return; }
+      setEmail(data.user.email || "");
+      const { data: profile } = await supabase.from("profiles").select("credits").eq("id", data.user.id).single();
+      setCredits(profile?.credits ?? 1000);
     }
+    loadUser();
+  }, [router]);
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/");
+    router.refresh();
   }
 
-  loadUser();
-}, []);
-
-  async function handleGenerate() {
-  if (!prompt.trim()) {
-    setMessage("请先输入视频提示词");
-    return;
-  }
-
-  if (model !== "xai" && model !== "kling") {
-    setMessage("目前只接通了 xAI 和 Kling");
-    return;
-  }
-
-  try {
-    setLoading(true);
-    setMessage("正在提交视频生成任务……");
-    setTaskId("");
-
-    const response = await fetch("/api/generate", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        provider: model,
-        prompt: prompt.trim(),
-        duration: Number(duration),
-        aspectRatio: ratio,
-        resolution: model === "xai" ? "480p" : "720p",
-      }),
-    });
-
-    const data = await response.json();
-
-    if (response.status === 401) {
-      setMessage("登录已失效，请重新登录");
-      router.replace("/login");
-      router.refresh();
+  function handleImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) {
+      setStatus("请选择 5MB 以内的 JPG 或 PNG 图片");
       return;
     }
-
-    if (!response.ok) {
-      throw new Error(data.error || "生成任务提交失败");
-    }
-
-    const newTaskId = data.taskId || data.requestId;
-
-    if (!newTaskId) {
-      throw new Error("任务提交成功，但没有返回任务 ID");
-    }
-
-    setTaskId(newTaskId);
-    setMessage("视频任务已成功提交，正在生成中……");
-  } catch (error) {
-    setMessage(
-      error instanceof Error ? error.message : "生成失败，请稍后重试"
-    );
-  } finally {
-    setLoading(false);
+    const reader = new FileReader();
+    reader.onload = () => { setImageData(String(reader.result)); setImageName(file.name); setStatus(""); };
+    reader.readAsDataURL(file);
   }
-}
+
+  async function submit(event?: FormEvent) {
+    event?.preventDefault();
+    const text = prompt.trim();
+    if (!text || loading) return;
+    const userMessage: Message = { role: "user", content: text };
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages); setPrompt(""); setLoading(true); setStatus(mode === "chat" ? "影动正在思考…" : mode === "image" ? "正在绘制图片…" : "正在生成视频…");
+
+    try {
+      if (mode === "chat") {
+        const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: nextMessages.map(({ role, content }) => ({ role, content })) }) });
+        const data = await response.json();
+        if (response.status === 401) return router.replace("/login");
+        if (!response.ok) throw new Error(data.error || "对话失败");
+        setMessages([...nextMessages, { role: "assistant", content: data.content }]);
+      } else if (mode === "image") {
+        const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: text, aspectRatio: ratio }) });
+        const data = await response.json();
+        if (response.status === 401) return router.replace("/login");
+        if (!response.ok) throw new Error(data.error || "图片生成失败");
+        setMessages([...nextMessages, { role: "assistant", content: "图片已经生成，可以打开或下载保存。", imageUrl: data.imageUrl }]);
+      } else {
+        const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: text, image: imageData || undefined, duration: Number(duration), aspectRatio: ratio, resolution }) });
+        const data = await response.json();
+        if (response.status === 401) return router.replace("/login");
+        if (!response.ok) throw new Error(data.error || "视频任务提交失败");
+        const requestId = data.requestId;
+        for (let attempt = 0; attempt < 120; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          const result = await fetch(`/api/status?requestId=${encodeURIComponent(requestId)}`, { cache: "no-store" });
+          const detail = await result.json();
+          if (!result.ok) throw new Error(detail.error || "查询视频状态失败");
+          if (detail.status === "done") {
+            setMessages([...nextMessages, { role: "assistant", content: "视频已经生成完成。", videoUrl: detail.videoUrl }]);
+            setStatus(""); setLoading(false); return;
+          }
+          if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，请调整提示词后重试");
+          setStatus(`视频生成中 · ${detail.progress ?? "请稍候"}${detail.progress ? "%" : ""}`);
+        }
+        throw new Error("生成等待超时，请稍后再试");
+      }
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "发生未知错误");
+    } finally { setLoading(false); }
+  }
+
+  function newConversation() { setMessages([]); setPrompt(""); setStatus(""); setImageData(""); setImageName(""); }
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: "30px",
-        color: "#ffffff",
-        background:
-          "radial-gradient(circle at top left, #172554 0%, #0f172a 42%, #020617 100%)",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "1200px",
-          margin: "0 auto",
-        }}
-      >
-        <header
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "28px",
-          }}
-        >
-          <div>
-            <h1 style={{ margin: 0, fontSize: "32px" }}>🎬 影动AI</h1>
-            <p style={{ color: "#94a3b8", marginTop: "8px" }}>
-              AI 漫剧与视频生成控制台
-            </p>
-          </div>
+    <main className="ai-shell">
+      <aside className="sidebar">
+        <Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link>
+        <button className="new-chat" onClick={newConversation}>＋ 新建创作</button>
+        <nav className="side-nav"><button className="active">✦ 当前会话</button><button onClick={() => setMode("image")}>▧ 图片创作</button><button onClick={() => setMode("video")}>▷ 视频创作</button></nav>
+        <div className="recent"><p>最近使用</p><span>AI 漫剧创作助手</span><span>短视频脚本策划</span></div>
+        <div className="account"><div className="avatar">{email.slice(0, 1).toUpperCase() || "Y"}</div><div><b>{email.split("@")[0] || "创作者"}</b><small>{credits} 积分</small></div><button onClick={signOut} title="退出登录">↗</button></div>
+      </aside>
 
-          <div
-            style={{
-              padding: "12px 18px",
-              borderRadius: "14px",
-              background: "rgba(15, 23, 42, 0.8)",
-              border: "1px solid rgba(148, 163, 184, 0.25)",
-            }}
-          >
-            💎 当前积分：{credits}
-          </div>
-        </header>
+      <section className="studio">
+        <header className="studio-head"><div><b>影动 1.0</b><span>创作模式</span></div><Link href="/">返回首页</Link></header>
+        <div className={`conversation ${messages.length ? "has-messages" : ""}`}>
+          {messages.length === 0 ? <div className="welcome"><div className="spark">✦</div><h1>今天想创造什么？</h1><p>对话、写作、绘图和视频生成，都可以从一句话开始。</p><div className="starters">{starters.map((item) => <button key={item} onClick={() => setPrompt(item)}>{item}<span>↗</span></button>)}</div></div> : <div className="message-list">{messages.map((message, index) => <article className={`message ${message.role}`} key={`${message.role}-${index}`}><div className="message-avatar">{message.role === "assistant" ? "✦" : "你"}</div><div><p>{message.content}</p>{message.imageUrl && <a href={message.imageUrl} target="_blank" rel="noreferrer"><Image src={message.imageUrl} alt="AI 生成作品" width={1024} height={1024} unoptimized/></a>}{message.videoUrl && <video src={message.videoUrl} controls playsInline/>}</div></article>)}</div>}
+        </div>
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)",
-            gap: "24px",
-          }}
-        >
-          <div
-            style={{
-              padding: "24px",
-              borderRadius: "22px",
-              background: "rgba(15, 23, 42, 0.82)",
-              border: "1px solid rgba(148, 163, 184, 0.2)",
-              boxShadow: "0 20px 60px rgba(0, 0, 0, 0.28)",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>创作设置</h2>
-
-            <label
-              style={{
-                display: "block",
-                marginBottom: "10px",
-                color: "#cbd5e1",
-              }}
-            >
-              视频提示词
-            </label>
-
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="例如：末日城市暴雨中，年轻男子站在便利店门口，国漫电影CG风格，镜头缓慢推进……"
-              style={{
-                width: "100%",
-                minHeight: "190px",
-                padding: "16px",
-                resize: "vertical",
-                borderRadius: "14px",
-                border: "1px solid #334155",
-                background: "#020617",
-                color: "#ffffff",
-                fontSize: "16px",
-                boxSizing: "border-box",
-                outline: "none",
-              }}
-            />
-
-            <div
-              style={{
-                marginTop: "20px",
-                padding: "22px",
-                textAlign: "center",
-                borderRadius: "16px",
-                border: "2px dashed #7c3aed",
-                background: "rgba(124, 58, 237, 0.08)",
-              }}
-            >
-              <div style={{ fontSize: "36px", marginBottom: "8px" }}>🖼️</div>
-              <p style={{ margin: "6px 0" }}>点击上传角色参考图</p>
-              <p style={{ margin: 0, color: "#94a3b8", fontSize: "13px" }}>
-                支持 JPG、PNG，最大 5MB
-              </p>
-
-              <input
-                type="file"
-                accept="image/*"
-                style={{ marginTop: "14px" }}
-              />
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                gap: "14px",
-                marginTop: "22px",
-              }}
-            >
-              <div>
-                <label style={{ display: "block", marginBottom: "8px" }}>
-                  模型
-                </label>
-                <select
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="xai">xAI Grok</option>
-<option value="kling">Kling 3.0</option>
-<option value="veo">Google Veo</option>
-<option value="runway">Runway</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: "block", marginBottom: "8px" }}>
-                  时长
-                </label>
-                <select
-                  value={duration}
-                  onChange={(event) => setDuration(event.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="5">5秒</option>
-                  <option value="10">10秒</option>
-                  <option value="15">15秒</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: "block", marginBottom: "8px" }}>
-                  比例
-                </label>
-                <select
-                  value={ratio}
-                  onChange={(event) => setRatio(event.target.value)}
-                  style={selectStyle}
-                >
-                  <option value="9:16">9:16 竖屏</option>
-                  <option value="16:9">16:9 横屏</option>
-                  <option value="1:1">1:1 方形</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-  onClick={handleGenerate}
-  disabled={loading}
-  style={{
-    width: "100%",
-    marginTop: "24px",
-    padding: "16px",
-    border: "none",
-    borderRadius: "14px",
-    color: "#ffffff",
-    fontSize: "17px",
-    fontWeight: 700,
-    cursor: loading ? "not-allowed" : "pointer",
-    opacity: loading ? 0.65 : 1,
-    background:
-      "linear-gradient(90deg, #7c3aed 0%, #a855f7 52%, #ec4899 100%)",
-    boxShadow: "0 10px 30px rgba(168, 85, 247, 0.35)",
-  }}
->
-  {loading ? "正在提交……" : "立即生成 · 50积分"}
-</button>
-{message && (
-  <p
-    style={{
-      marginTop: "14px",
-      color: message.includes("失败") ? "#f87171" : "#c4b5fd",
-    }}
-  >
-    {message}
-  </p>
-)}
-
-{taskId && (
-  <p
-    style={{
-      marginTop: "8px",
-      color: "#94a3b8",
-      fontSize: "13px",
-      wordBreak: "break-all",
-    }}
-  >
-    任务 ID：{taskId}
-  </p>
-)}
-          </div>
-
-          <div
-            style={{
-              padding: "24px",
-              borderRadius: "22px",
-              background: "rgba(15, 23, 42, 0.82)",
-              border: "1px solid rgba(148, 163, 184, 0.2)",
-              boxShadow: "0 20px 60px rgba(0, 0, 0, 0.28)",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>视频预览</h2>
-
-            <div
-              style={{
-                minHeight: "520px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                textAlign: "center",
-                borderRadius: "18px",
-                background: "#020617",
-                border: "1px solid #1e293b",
-                color: "#64748b",
-              }}
-            >
-              <div>
-                <div style={{ fontSize: "48px", marginBottom: "12px" }}>🎞️</div>
-                <p>生成的视频将在这里显示</p>
-                <p style={{ fontSize: "14px" }}>
-                  {duration}秒 · {ratio} · {model}
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
+        <form className="composer" onSubmit={submit}>
+          <div className="mode-tabs">{(["chat", "image", "video"] as Mode[]).map((item) => <button type="button" className={mode === item ? "active" : ""} key={item} onClick={() => setMode(item)}>{item === "chat" ? "✦ 对话" : item === "image" ? "▧ 图片" : "▷ 视频"}</button>)}</div>
+          <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } }} placeholder={mode === "chat" ? "问影动任何问题…" : mode === "image" ? "描述你想生成的画面…" : "描述镜头、角色动作、场景和风格…"}/>
+          {mode === "video" && <div className="video-options"><select value={duration} onChange={(e) => setDuration(e.target.value)}><option value="5">5 秒</option><option value="10">10 秒</option><option value="15">15 秒</option></select><select value={ratio} onChange={(e) => setRatio(e.target.value)}><option value="9:16">9:16 竖屏</option><option value="16:9">16:9 横屏</option><option value="1:1">1:1 方形</option></select><select value={resolution} onChange={(e) => setResolution(e.target.value)}><option value="480p">480p</option><option value="720p">720p</option></select></div>}
+          <div className="composer-actions"><div><button type="button" className="attach" onClick={() => fileInput.current?.click()}>＋</button><input ref={fileInput} type="file" accept="image/*" hidden onChange={handleImage}/>{imageName && <span className="file-chip">▧ {imageName}<button type="button" onClick={() => { setImageData(""); setImageName(""); }}>×</button></span>}</div><button className="send" disabled={!prompt.trim() || loading} aria-label="发送">{loading ? "…" : "↑"}</button></div>
+          {status && <p className="status">{status}</p>}
+        </form>
+        <p className="disclaimer">AI 生成内容可能存在错误，重要信息请自行核实。</p>
+      </section>
     </main>
   );
 }
-
-const selectStyle = {
-  width: "100%",
-  padding: "12px",
-  borderRadius: "12px",
-  border: "1px solid #334155",
-  background: "#020617",
-  color: "#ffffff",
-  fontSize: "15px",
-};

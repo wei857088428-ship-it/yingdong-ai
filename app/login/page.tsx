@@ -1,78 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
-
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  async function signUp() {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      alert("注册成功，请检查邮箱！");
-    }
+  async function signIn(event: FormEvent) {
+    event.preventDefault(); setLoading(true); setMessage("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) return setMessage(error.message);
+    router.push("/dashboard"); router.refresh();
   }
 
-  async function signIn() {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      alert("登录成功！");
-      router.push("/dashboard");
-      router.refresh();
-    }
-  }
-
-  return (
-    <div style={{ maxWidth: 400, margin: "80px auto" }}>
-      <h1>影动AI 登录</h1>
-
-      <input
-        placeholder="邮箱"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
-      />
-
-      <input
-        type="password"
-        placeholder="密码"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        style={{ width: "100%", padding: 10, marginBottom: 10 }}
-      />
-
-      <button
-        onClick={signIn}
-        style={{ width: "100%", padding: 10 }}
-      >
-        登录
-      </button>
-
-      <br />
-      <br />
-
-      <button
-        onClick={signUp}
-        style={{ width: "100%", padding: 10 }}
-      >
-        注册
-      </button>
-    </div>
-  );
+  return <main className="auth-page"><form className="auth-card" onSubmit={signIn}><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><h1>欢迎回来</h1><p>登录后继续你的 AI 创作。</p>{message && <div className="auth-message">{message}</div>}<label htmlFor="email">邮箱</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com"/><label htmlFor="password">密码</label><input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="输入密码"/><button className="auth-submit" disabled={loading}>{loading ? "正在登录…" : "登录"}</button><p className="auth-switch">还没有账号？ <Link href="/register">免费注册</Link></p></form></main>;
 }
