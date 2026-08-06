@@ -21,6 +21,8 @@ export default function CharactersPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    const requestedName = new URLSearchParams(window.location.search).get("name")?.trim();
+    if (requestedName) { setName(requestedName); setStatus(`请上传 ${requestedName} 的正面参考图并完善固定外貌`); }
     supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) { router.replace("/login"); return; }
       setUserId(data.user.id);

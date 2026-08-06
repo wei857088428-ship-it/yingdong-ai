@@ -24,6 +24,10 @@ function matchCharacterIds(names: string[], characters: Character[]) {
   return characters.filter((character) => requested.has(normalizeName(character.name))).map((character) => character.id).slice(0, 6);
 }
 
+function cleanCharacterNames(names: string[]) {
+  return [...new Set(names.map((name) => String(name).trim()).filter(Boolean))].slice(0, 6);
+}
+
 function storyboardSchema(shotCount: number) {
   return {
     type: "object", additionalProperties: false, required: ["title", "shots"],
@@ -58,19 +62,22 @@ export async function POST(request: Request) {
     const characters = (characterRows ?? []) as Character[];
     const characterCatalog = characters.length
       ? characters.map((character) => `${character.name} V${character.version}`).join("、")
-      : "暂无角色；所有 character_names 返回空数组";
+      : "暂无已创建角色";
     const usage = await reserveUsage(user.id, "chat"); eventId = usage.eventId;
-    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。当前用户角色库：${characterCatalog}。每个镜头的 character_names 只能填写角色库中确实在画面出现的角色名称，不要填写版本号，不得创造新名称；没有匹配角色时返回空数组。` }, { role: "user", content: story }] }) });
+    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。当前用户角色库：${characterCatalog}。每个镜头的 character_names 填写画面中确实出现的剧情角色姓名，不要填写版本号、群演或泛称。已有角色必须使用角色库中的准确名称；剧情需要但角色库没有的人物也要保留原姓名，供用户补建角色。没有具名角色时返回空数组。` }, { role: "user", content: story }] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "分镜生成失败");
     const parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
-    const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => ({
+    const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => {
+      const characterNames = cleanCharacterNames(Array.isArray(shot.character_names) ? shot.character_names : []);
+      return {
       shot_number: index + 1,
       duration_seconds: Math.min(15, Math.max(2, Number(shot.duration_seconds ?? 5))),
       shot_type: String(shot.shot_type ?? ""), camera: String(shot.camera ?? ""), scene: String(shot.scene ?? ""),
       action: String(shot.action ?? ""), dialogue: String(shot.dialogue ?? ""), sound: String(shot.sound ?? ""),
       image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
-      character_ids: matchCharacterIds(Array.isArray(shot.character_names) ? shot.character_names : [], characters),
-    }));
+      character_names: characterNames,
+      character_ids: matchCharacterIds(characterNames, characters),
+    }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
     const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
     if (projectError) throw projectError;
