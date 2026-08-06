@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { characterPrompt, getCharacter } from "@/app/lib/characters";
 
-type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string };
+type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; batch?: boolean };
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       const { data, error } = await supabaseAdmin.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "video" }).select("id").single();
       if (error) throw error; conversationId = data.id;
     }
-    const usage = await reserveUsage(user.id, "video"); eventId = usage.eventId;
+    const usage = await reserveUsage(user.id, "video", body.batch === true); eventId = usage.eventId;
     await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const character = await getCharacter(user.id, body.characterId);
     const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + characterPrompt(character), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };

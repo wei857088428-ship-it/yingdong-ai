@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 500 });
   let eventId = "";
   try {
-    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string };
+    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; batch?: boolean };
     const prompt = body.prompt?.trim();
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
       const { data, error } = await supabaseAdmin.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "image" }).select("id").single();
       if (error) throw error; conversationId = data.id;
     }
-    const usage = await reserveUsage(user.id, "image"); eventId = usage.eventId;
+    const usage = await reserveUsage(user.id, "image", body.batch === true); eventId = usage.eventId;
     await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const character = await getCharacter(user.id, body.characterId);
     const finalPrompt = prompt + characterPrompt(character);

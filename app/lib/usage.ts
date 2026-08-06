@@ -6,10 +6,14 @@ const policy: Record<UsageKind, { cost: number; limit: number; window: number }>
   image: { cost: 20, limit: 4, window: 60 },
   video: { cost: 80, limit: 2, window: 300 },
 };
+const batchPolicy: Partial<Record<UsageKind, { cost: number; limit: number; window: number }>> = {
+  image: { cost: 20, limit: 30, window: 3600 },
+  video: { cost: 80, limit: 20, window: 3600 },
+};
 
-export async function reserveUsage(userId: string, kind: UsageKind) {
+export async function reserveUsage(userId: string, kind: UsageKind, batch = false) {
   const supabase = await createServerSupabaseClient();
-  const rule = policy[kind];
+  const rule = batch ? batchPolicy[kind] ?? policy[kind] : policy[kind];
   const { data, error } = await supabase.rpc("reserve_credits", {
     p_user_id: userId, p_kind: kind, p_cost: rule.cost, p_limit: rule.limit, p_window_seconds: rule.window,
   });
