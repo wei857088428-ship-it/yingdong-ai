@@ -65,7 +65,7 @@ export default function Dashboard() {
       const { data: characterRows } = await supabase.from("characters").select("id,name,description,version,images").order("updated_at", { ascending: false });
       setCharacters((characterRows ?? []) as Character[]);
       const draft = localStorage.getItem("yingdong-studio-draft");
-      if (draft) { try { const parsed = JSON.parse(draft) as { prompt?: string; mode?: Mode; shotId?: string; projectId?: string }; if (parsed.prompt) setPrompt(parsed.prompt); if (parsed.mode) setMode(parsed.mode); if (parsed.shotId && parsed.projectId && (parsed.mode === "image" || parsed.mode === "video")) setStoryboardTarget({ shotId: parsed.shotId, projectId: parsed.projectId, mode: parsed.mode }); setPanel("create"); } finally { localStorage.removeItem("yingdong-studio-draft"); } }
+      if (draft) { try { const parsed = JSON.parse(draft) as { prompt?: string; mode?: Mode; shotId?: string; projectId?: string; characterId?: string }; if (parsed.prompt) setPrompt(parsed.prompt); if (parsed.mode) setMode(parsed.mode); if (parsed.characterId) setSelectedCharacterId(parsed.characterId); if (parsed.shotId && parsed.projectId && (parsed.mode === "image" || parsed.mode === "video")) setStoryboardTarget({ shotId: parsed.shotId, projectId: parsed.projectId, mode: parsed.mode }); setPanel("create"); } finally { localStorage.removeItem("yingdong-studio-draft"); } }
     });
   }, [router]);
 
