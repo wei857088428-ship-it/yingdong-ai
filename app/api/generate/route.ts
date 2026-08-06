@@ -12,7 +12,13 @@ type GenerateBody = {
   resolution?: string;
 };
 
-type JsonObject = Record<string, any>;
+type JsonObject = {
+  error?: { message?: string };
+  message?: string;
+  request_id?: string;
+  code?: number;
+  data?: { id?: string; status?: string };
+};
 
 export async function POST(request: NextRequest) {
   try {
@@ -59,7 +65,7 @@ export async function POST(request: NextRequest) {
     ) {
       return NextResponse.json(
         {
-          error: "视频时长必须为1-15秒",
+          error: "视频时长必须为 1–15 秒",
         },
         {
           status: 400,
@@ -87,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: "服务器错误",
+        error: "视频生成服务发生错误",
       },
       {
         status: 500,
@@ -118,7 +124,7 @@ async function createXaiVideo({
   if (!apiKey) {
     return NextResponse.json(
       {
-        error: "服务器没有配置 XAI_API_KEY",
+        error: "AI 视频服务尚未配置",
       },
       {
         status: 500,
@@ -161,7 +167,7 @@ async function createXaiVideo({
         error:
           data?.error?.message ??
           data?.message ??
-          "xAI生成失败",
+          "xAI 视频生成失败",
       },
       {
         status: response.status,
@@ -197,7 +203,7 @@ async function createKlingVideo({
   if (!apiKey) {
     return NextResponse.json(
       {
-        error: "服务器没有配置 KLING_API_KEY",
+        error: "Kling 视频服务尚未配置",
       },
       {
         status: 500,
@@ -235,11 +241,18 @@ async function createKlingVideo({
   if (!response.ok || data?.code !== 0) {
     return NextResponse.json(
       {
-        error: data?.message ?? "Kling生成失败",
+        error: data?.message ?? "Kling 视频生成失败",
       },
       {
         status: response.ok ? 400 : response.status,
       }
+    );
+  }
+
+  if (!data.data?.id) {
+    return NextResponse.json(
+      { error: "Kling 未返回视频任务 ID" },
+      { status: 502 }
     );
   }
 
