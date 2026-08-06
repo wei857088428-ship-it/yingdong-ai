@@ -1,265 +1,42 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
+import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
-type Provider = "xai" | "kling";
+type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string };
 
-type GenerateBody = {
-  provider?: Provider;
-  prompt?: string;
-  image?: string;
-  duration?: number;
-  aspectRatio?: string;
-  resolution?: string;
-};
-
-type JsonObject = {
-  error?: { message?: string };
-  message?: string;
-  request_id?: string;
-  code?: number;
-  data?: { id?: string; status?: string };
-};
-
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "请先登录后再生成视频" }, { status: 401 });
+  let eventId = "";
   try {
-    // ========= 登录验证 =========
-    const user = await getCurrentUser();
-
-    if (!user) {
-      return NextResponse.json(
-        {
-          error: "请先登录后再生成视频",
-        },
-        {
-          status: 401,
-        }
-      );
-    }
-
-    // ========= 读取参数 =========
     const body = (await request.json()) as GenerateBody;
-
-    const provider: Provider =
-      body.provider === "kling" ? "kling" : "xai";
-
     const prompt = body.prompt?.trim();
     const duration = Number(body.duration ?? 5);
-    const aspectRatio = body.aspectRatio ?? "9:16";
-    const resolution = body.resolution ?? "480p";
-
-    if (!prompt) {
-      return NextResponse.json(
-        {
-          error: "请输入视频提示词",
-        },
-        {
-          status: 400,
-        }
-      );
+    if (!prompt) return NextResponse.json({ error: "请输入视频提示词" }, { status: 400 });
+    if (!Number.isInteger(duration) || duration < 1 || duration > 15) return NextResponse.json({ error: "视频时长必须为 1—15 秒" }, { status: 400 });
+    if (body.provider === "kling") return NextResponse.json({ error: "Kling 通道正在维护，请使用 xAI 视频" }, { status: 503 });
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) return NextResponse.json({ error: "AI 视频服务尚未配置" }, { status: 500 });
+    let conversationId = body.conversationId;
+    if (!conversationId) {
+      const { data, error } = await supabaseAdmin.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "video" }).select("id").single();
+      if (error) throw error; conversationId = data.id;
     }
-
-    if (
-      !Number.isInteger(duration) ||
-      duration < 1 ||
-      duration > 15
-    ) {
-      return NextResponse.json(
-        {
-          error: "视频时长必须为 1–15 秒",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    if (provider === "kling") {
-      return await createKlingVideo({
-        prompt,
-        duration,
-        aspectRatio,
-      });
-    }
-
-    return await createXaiVideo({
-      prompt,
-      image: body.image,
-      duration,
-      aspectRatio,
-      resolution,
-    });
+    const usage = await reserveUsage(user.id, "video"); eventId = usage.eventId;
+    await supabaseAdmin.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
+    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt, duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
+    if (body.image) requestBody.image = { url: body.image };
+    const response = await fetch("https://api.x.ai/v1/videos/generations", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(requestBody), cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data?.error?.message ?? data?.message ?? "xAI 视频生成失败");
+    const requestId = data.request_id;
+    if (!requestId) throw new Error("视频服务未返回任务 ID");
+    const { data: work, error: workError } = await supabaseAdmin.from("works").insert({ user_id: user.id, conversation_id: conversationId, type: "video", prompt, status: "processing", provider_task_id: requestId, usage_event_id: eventId }).select("id").single();
+    if (workError) throw workError;
+    return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status: "submitted", conversationId, workId: work.id, credits: usage.credits });
   } catch (error) {
-    console.error(error);
-
-    return NextResponse.json(
-      {
-        error: "视频生成服务发生错误",
-      },
-      {
-        status: 500,
-      }
-    );
+    if (eventId) await finishUsage(user.id, eventId, false).catch(() => undefined);
+    return NextResponse.json({ error: error instanceof Error ? error.message : "视频生成服务发生错误" }, { status: 500 });
   }
-}
-
-/* ===========================================
-                xAI
-=========================================== */
-
-async function createXaiVideo({
-  prompt,
-  image,
-  duration,
-  aspectRatio,
-  resolution,
-}: {
-  prompt: string;
-  image?: string;
-  duration: number;
-  aspectRatio: string;
-  resolution: string;
-}) {
-  const apiKey = process.env.XAI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      {
-        error: "AI 视频服务尚未配置",
-      },
-      {
-        status: 500,
-      }
-    );
-  }
-
-  const requestBody: Record<string, unknown> = {
-    model: "grok-imagine-video",
-    prompt,
-    duration,
-    aspect_ratio: aspectRatio,
-    resolution,
-  };
-
-  if (image) {
-    requestBody.image = {
-      url: image,
-    };
-  }
-
-  const response = await fetch(
-    "https://api.x.ai/v1/videos/generations",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-      cache: "no-store",
-    }
-  );
-
-  const data = (await response.json()) as JsonObject;
-
-  if (!response.ok) {
-    return NextResponse.json(
-      {
-        error:
-          data?.error?.message ??
-          data?.message ??
-          "xAI 视频生成失败",
-      },
-      {
-        status: response.status,
-      }
-    );
-  }
-
-  const requestId = data.request_id;
-
-  return NextResponse.json({
-    provider: "xai",
-    requestId,
-    taskId: requestId,
-    status: "submitted",
-  });
-}
-
-/* ===========================================
-                Kling
-=========================================== */
-
-async function createKlingVideo({
-  prompt,
-  duration,
-  aspectRatio,
-}: {
-  prompt: string;
-  duration: number;
-  aspectRatio: string;
-}) {
-  const apiKey = process.env.KLING_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      {
-        error: "Kling 视频服务尚未配置",
-      },
-      {
-        status: 500,
-      }
-    );
-  }
-
-  const response = await fetch(
-    "https://api-beijing.klingai.com/text-to-video/kling-3.0-turbo",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt,
-        options: {
-          watermark_info: {
-            enabled: false,
-          },
-        },
-        settings: {
-          duration,
-          resolution: "720p",
-          aspect_ratio: aspectRatio,
-        },
-      }),
-      cache: "no-store",
-    }
-  );
-
-  const data = (await response.json()) as JsonObject;
-
-  if (!response.ok || data?.code !== 0) {
-    return NextResponse.json(
-      {
-        error: data?.message ?? "Kling 视频生成失败",
-      },
-      {
-        status: response.ok ? 400 : response.status,
-      }
-    );
-  }
-
-  if (!data.data?.id) {
-    return NextResponse.json(
-      { error: "Kling 未返回视频任务 ID" },
-      { status: 502 }
-    );
-  }
-
-  return NextResponse.json({
-    provider: "kling",
-    requestId: data.data.id,
-    taskId: data.data.id,
-    status: data.data.status,
-  });
 }
