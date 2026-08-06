@@ -5,6 +5,27 @@ import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string };
 
+const shotProperties = {
+  shot_number: { type: "integer" },
+  duration_seconds: { type: "integer", minimum: 2, maximum: 15 },
+  shot_type: { type: "string" }, camera: { type: "string" }, scene: { type: "string" },
+  action: { type: "string" }, dialogue: { type: "string" }, sound: { type: "string" },
+  image_prompt: { type: "string" }, video_prompt: { type: "string" },
+};
+
+function storyboardSchema(shotCount: number) {
+  return {
+    type: "object", additionalProperties: false, required: ["title", "shots"],
+    properties: {
+      title: { type: "string" },
+      shots: {
+        type: "array", minItems: shotCount, maxItems: shotCount,
+        items: { type: "object", additionalProperties: false, required: Object.keys(shotProperties), properties: shotProperties },
+      },
+    },
+  };
+}
+
 function parseJson(text: string) {
   const cleaned = text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
@@ -22,10 +43,16 @@ export async function POST(request: Request) {
     if (!story || story.length < 30) return NextResponse.json({ error: "请粘贴至少30字的小说或剧情" }, { status: 400 });
     const apiKey = process.env.XAI_API_KEY; if (!apiKey) throw new Error("AI 服务尚未配置");
     const usage = await reserveUsage(user.id, "chat"); eventId = usage.eventId;
-    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。只返回JSON对象，不要Markdown。结构：{"title":"集名","shots":[{"shot_number":1,"duration_seconds":5,"shot_type":"近景","camera":"缓慢推进","scene":"场景与构图","action":"角色动作与情绪","dialogue":"对白或旁白","sound":"音效与音乐","image_prompt":"详细中文图片提示词，9:16，包含角色、景别、构图、光线，禁止文字水印","video_prompt":"详细图生视频动作与运镜提示词"}]}。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。` }, { role: "user", content: story }] }) });
+    const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。保持角色、服装、场景与时间连续；开头3秒有钩子，结尾有悬念。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。` }, { role: "user", content: story }] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "分镜生成失败");
     const parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
-    const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => ({ ...shot, shot_number: index + 1, duration_seconds: Math.min(15, Math.max(2, Number(shot.duration_seconds ?? 5))) }));
+    const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => ({
+      shot_number: index + 1,
+      duration_seconds: Math.min(15, Math.max(2, Number(shot.duration_seconds ?? 5))),
+      shot_type: String(shot.shot_type ?? ""), camera: String(shot.camera ?? ""), scene: String(shot.scene ?? ""),
+      action: String(shot.action ?? ""), dialogue: String(shot.dialogue ?? ""), sound: String(shot.sound ?? ""),
+      image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
+    }));
     if (!shots.length) throw new Error("没有生成分镜，请重试");
     const { data: project, error: projectError } = await supabaseAdmin.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
     if (projectError) throw projectError;
