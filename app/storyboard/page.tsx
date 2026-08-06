@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
-type Project = { id: string; title: string; created_at: string; character_id?: string; storyboard_shots: Shot[] };
+type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
 
 export default function StoryboardPage() {
@@ -48,6 +48,20 @@ export default function StoryboardPage() {
     const current = effectiveCharacterIds(shot); const next = checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
     await updateShot(shot.id, { characterIds: next });
     setStatus(`镜头 ${shot.shot_number} 已绑定 ${next.length} 个角色`);
+  }
+
+  async function continueProject() {
+    if (!currentProjectId || loading) return;
+    if (!window.confirm("AI 将读取本集剧情和结尾，生成下一集完整分镜，预计消耗 1 积分。确定继续吗？")) return;
+    setLoading(true); setStatus("AI 编剧正在承接本集结尾，创作下一集…");
+    try {
+      const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ continueFromProjectId: currentProjectId, shotCount: Number(shotCount) }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error);
+      setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
+      setStatus(`下一集已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`);
+      window.history.replaceState(null, "", `/storyboard?project=${data.project.id}`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : "续写下一集失败"); }
+    finally { setLoading(false); }
   }
 
   async function bindCharacter(nextCharacterId: string) {
@@ -123,7 +137,7 @@ export default function StoryboardPage() {
             <button disabled={batching} onClick={batchVoices}>批量生成配音 · {shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length} 镜</button>
             <button disabled={batching} onClick={exportSrt}>导出 SRT 字幕</button>
           </div>
-          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
+          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "续写中…" : "AI 续写下一集"}</button>}{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
           <div className="shot-list">{shots.map((shot) => <article key={shot.shot_number}>
             {shot.image_url && <Image className="shot-preview" src={shot.image_url} alt={`镜头${shot.shot_number}`} width={600} height={1067} unoptimized/>}
             {shot.video_url && <video className="shot-preview" src={shot.video_url} controls playsInline/>}
