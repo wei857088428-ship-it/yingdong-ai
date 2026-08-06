@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 
 const allowed = ["pending", "image_generating", "image_ready", "video_generating", "completed", "failed"];
 
@@ -12,7 +12,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body.videoUrl) updates.video_url = body.videoUrl;
   if (body.status && allowed.includes(body.status)) updates.media_status = body.status;
   if (body.error !== undefined) updates.error_message = body.error?.slice(0, 500) || null;
-  const { data, error } = await supabaseAdmin.from("storyboard_shots").update(updates).eq("id", id).eq("user_id", user.id).select("*").single();
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.from("storyboard_shots").update(updates).eq("id", id).eq("user_id", user.id).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ shot: data });
 }

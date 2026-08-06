@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string };
@@ -36,6 +36,7 @@ function parseJson(text: string) {
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const supabase = await createServerSupabaseClient();
   let eventId = "";
   try {
     const body = (await request.json()) as { title?: string; story?: string; shotCount?: number };
@@ -54,9 +55,9 @@ export async function POST(request: Request) {
       image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
     }));
     if (!shots.length) throw new Error("没有生成分镜，请重试");
-    const { data: project, error: projectError } = await supabaseAdmin.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
+    const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story }).select("id,title,created_at").single();
     if (projectError) throw projectError;
-    const { data: savedShots, error: shotError } = await supabaseAdmin.from("storyboard_shots").insert(shots.map((shot) => ({ ...shot, project_id: project.id, user_id: user.id }))).select("*").order("shot_number");
+    const { data: savedShots, error: shotError } = await supabase.from("storyboard_shots").insert(shots.map((shot) => ({ ...shot, project_id: project.id, user_id: user.id }))).select("*").order("shot_number");
     if (shotError) throw shotError;
     const credits = await finishUsage(user.id, eventId, true);
     return NextResponse.json({ project, shots: savedShots, credits });
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
 
 export async function GET() {
   const user = await getCurrentUser(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  const { data } = await supabaseAdmin.from("storyboard_projects").select("id,title,created_at,storyboard_shots(*)").eq("user_id", user.id).order("created_at", { ascending: false }).limit(10);
+  const supabase = await createServerSupabaseClient();
+  const { data } = await supabase.from("storyboard_projects").select("id,title,created_at,storyboard_shots(*)").eq("user_id", user.id).order("created_at", { ascending: false }).limit(10);
   return NextResponse.json({ projects: data ?? [] });
 }
