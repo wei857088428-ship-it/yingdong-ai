@@ -25,10 +25,10 @@ export default function EpisodePage() {
   function selectShot(next:number){ setElapsed(0); setIndex(Math.min(shots.length-1,Math.max(0,next))); }
   function downloadManifest(){ if(!project)return; const timeline=shots.map((item,i)=>({order:i+1,start_seconds:shots.slice(0,i).reduce((sum,s)=>sum+s.duration_seconds,0),duration_seconds:item.duration_seconds,video:item.video_url??null,image:item.image_url??null,audio:item.audio_url??null,subtitle:item.dialogue??""})); const url=URL.createObjectURL(new Blob([JSON.stringify({project:{id:project.id,title:project.title},format:"9:16",timeline},null,2)],{type:"application/json"})); const a=document.createElement("a");a.href=url;a.download=`${project.title}-剪辑工程.json`;a.click();URL.revokeObjectURL(url); }
 
-  if(error)return <main className="episode-page"><div className="episode-empty">{error}<Link href="/storyboard">返回分镜</Link></div></main>;
+  if(error)return <main className="episode-page"><div className="episode-empty">{error}<Link href={`/storyboard?project=${params.id}`}>返回分镜</Link></div></main>;
   if(!project||!shot)return <main className="episode-page"><div className="episode-empty">正在加载整集时间轴…</div></main>;
   return <main className="episode-page">
-    <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/storyboard">返回分镜</Link></header>
+    <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href={`/storyboard?project=${params.id}`}>返回分镜</Link></header>
     <section className="episode-editor">
       <div className="episode-stage">
         <div className="episode-phone">{shot.video_url ? <video ref={videoRef} src={shot.video_url} muted playsInline/> : shot.image_url ? <Image src={shot.image_url} alt={shot.scene} fill unoptimized/> : <div className="episode-placeholder">镜头 {shot.shot_number}<small>{shot.scene}</small></div>}{shot.audio_url&&<audio ref={audioRef} src={shot.audio_url}/>} {shot.dialogue&&<div className="episode-subtitle">{shot.dialogue}</div>}</div>
