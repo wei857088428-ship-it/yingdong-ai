@@ -16,7 +16,22 @@ export default function StoryboardPage() {
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
   const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("orion"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
 
-  useEffect(() => { supabase.auth.getUser().then(async ({ data }) => { if (!data.user) { router.replace("/login"); return; } const [response, characterResult] = await Promise.all([fetch("/api/storyboard", { cache: "no-store" }), supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false })]); if (response.ok) { const loadedProjects = (await response.json()).projects as Project[]; setProjects(loadedProjects); const requestedId = new URLSearchParams(window.location.search).get("project"); const selected = loadedProjects.find((project) => project.id === requestedId) ?? loadedProjects[0]; if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); } } setCharacters((characterResult.data ?? []) as Character[]); }); }, [router]);
+  useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
+    if (!data.user) { router.replace("/login"); return; }
+    const requestedId = new URLSearchParams(window.location.search).get("project");
+    const [response, characterResult, requestedResponse] = await Promise.all([
+      fetch("/api/storyboard", { cache: "no-store" }),
+      supabase.from("characters").select("id,name,version").order("updated_at", { ascending: false }),
+      requestedId ? fetch(`/api/storyboard/projects/${requestedId}`, { cache: "no-store" }) : Promise.resolve(null),
+    ]);
+    const loadedProjects = response.ok ? (await response.json()).projects as Project[] : [];
+    const requestedProject = requestedResponse?.ok ? (await requestedResponse.json()).project as Project : undefined;
+    const allProjects = requestedProject && !loadedProjects.some((project) => project.id === requestedProject.id) ? [requestedProject, ...loadedProjects] : loadedProjects;
+    setProjects(allProjects);
+    const selected = requestedProject ?? allProjects[0];
+    if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); }
+    setCharacters((characterResult.data ?? []) as Character[]);
+  }); }, [router]);
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
