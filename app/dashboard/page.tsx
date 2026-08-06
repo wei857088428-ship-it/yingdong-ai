@@ -14,9 +14,9 @@ type Character = { id: string; name: string; description: string; version: numbe
 
 const starters = ["帮我策划一部三集悬疑漫剧", "写一个有反转的短视频脚本", "生成国漫电影感角色海报", "把这张图片变成动态镜头"];
 const manjuSteps: Array<{ step: string; title: string; detail: string; status: "available" | "next" | "planned"; mode: Mode; prompt: string }> = [
-  { step: "01", title: "创建角色库", detail: "保存正面、左右45°和全身参考图，建立角色 V1", status: "next", mode: "image", prompt: "为【角色名】创建统一角色设定图：正面、左45度、右45度、全身，固定脸型、五官、发型、服装与配色，国漫电影感，纯色背景，专业动画设定稿。" },
+  { step: "01", title: "创建角色库", detail: "保存正面、左右45°和全身参考图，建立角色 V1", status: "available", mode: "image", prompt: "为【角色名】创建统一角色设定图：正面、左45度、右45度、全身，固定脸型、五官、发型、服装与配色，国漫电影感，纯色背景，专业动画设定稿。" },
   { step: "02", title: "写小说 / 剧情", detail: "确定世界观、人物关系和连续多集剧情", status: "available", mode: "chat", prompt: "你是一名爆款漫剧策划。请围绕【题材/一句话创意】设计20集竖屏漫剧，输出世界观、角色关系、主线冲突和每集钩子。每集60—90秒，保持设定连续。" },
-  { step: "03", title: "AI 一键拆分镜", detail: "自动生成镜头、时长、景别、运镜、音效和提示词", status: "next", mode: "chat", prompt: "把上面的章节自动拆成10—15个分镜。用表格输出：镜号、时长、景别、机位、运镜、构图、角色动作、台词、音效、图片提示词、视频提示词。" },
+  { step: "03", title: "AI 一键拆分镜", detail: "自动生成镜头、时长、景别、运镜、音效和提示词", status: "available", mode: "chat", prompt: "把上面的章节自动拆成10—15个分镜。用表格输出：镜号、时长、景别、机位、运镜、构图、角色动作、台词、音效、图片提示词、视频提示词。" },
   { step: "04", title: "自动提示词", detail: "用户只选近景、推进等选项，系统补全专业提示词", status: "available", mode: "chat", prompt: "把【镜头内容】改写成专业漫剧生成提示词。自动补充景别、机位、构图、运镜、光线、角色动作、情绪、环境和负面限制，同时输出中文与英文版本。" },
   { step: "05", title: "保持人物一致", detail: "每个镜头自动绑定角色版本、固定脸型与服装", status: "next", mode: "image", prompt: "Use 【角色名】 Character V1. Same face, same hairstyle, same clothes, same identity. 竖屏漫剧画面，场景：【场景】，动作：【动作】，景别：【景别】，9:16，无文字，无水印。" },
   { step: "06", title: "批量生成图片", detail: "根据分镜连续生成整集画面", status: "next", mode: "image", prompt: "根据分镜清单依次生成9:16国漫画面。严格复用角色设定，保持脸型、发型、服装、场景色调和光线连续。当前镜头：【粘贴分镜】" },
@@ -62,6 +62,8 @@ export default function Dashboard() {
       setCredits(profile?.credits ?? 0);
       const { data: characterRows } = await supabase.from("characters").select("id,name,description,version,images").order("updated_at", { ascending: false });
       setCharacters((characterRows ?? []) as Character[]);
+      const draft = localStorage.getItem("yingdong-studio-draft");
+      if (draft) { try { const parsed = JSON.parse(draft) as { prompt?: string; mode?: Mode }; if (parsed.prompt) setPrompt(parsed.prompt); if (parsed.mode) setMode(parsed.mode); setPanel("create"); } finally { localStorage.removeItem("yingdong-studio-draft"); } }
     });
   }, [router]);
 
@@ -126,7 +128,7 @@ export default function Dashboard() {
     <aside className="sidebar">
       <Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link>
       <button className="new-chat" onClick={newConversation}>＋ 新建创作</button>
-      <nav className="side-nav"><button className={panel === "workflow" ? "active" : ""} onClick={() => setPanel("workflow")}>▦ 漫剧工作流</button><Link href="/characters">人 角色库</Link><button className={panel === "create" ? "active" : ""} onClick={() => setPanel("create")}>✦ 当前创作</button><button className={panel === "works" ? "active" : ""} onClick={() => setPanel("works")}>▧ 我的作品</button><Link href="/admin">⌁ 运营后台</Link></nav>
+      <nav className="side-nav"><button className={panel === "workflow" ? "active" : ""} onClick={() => setPanel("workflow")}>▦ 漫剧工作流</button><Link href="/characters">人 角色库</Link><Link href="/storyboard">镜 一键拆分镜</Link><button className={panel === "create" ? "active" : ""} onClick={() => setPanel("create")}>✦ 当前创作</button><button className={panel === "works" ? "active" : ""} onClick={() => setPanel("works")}>▧ 我的作品</button><Link href="/admin">⌁ 运营后台</Link></nav>
       <div className="recent"><p>历史会话</p>{conversations.length ? conversations.slice(0, 8).map((item) => <button key={item.id} onClick={() => openConversation(item.id)} title={item.title}>{item.title}</button>) : <span>还没有历史记录</span>}</div>
       <div className="account"><div className="avatar">{email.slice(0, 1).toUpperCase() || "Y"}</div><div><b>{email.split("@")[0] || "创作者"}</b><small>{credits} 积分</small></div><button onClick={signOut} title="退出登录">↗</button></div>
     </aside>
