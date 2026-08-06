@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string };
-type Project = { id: string; title: string; created_at: string; storyboard_shots: Shot[] };
+type Project = { id: string; title: string; created_at: string; character_id?: string; storyboard_shots: Shot[] };
 type Character = { id: string; name: string; version: number };
 
 export default function StoryboardPage() {
@@ -29,7 +29,7 @@ export default function StoryboardPage() {
     const allProjects = requestedProject && !loadedProjects.some((project) => project.id === requestedProject.id) ? [requestedProject, ...loadedProjects] : loadedProjects;
     setProjects(allProjects);
     const selected = requestedProject ?? allProjects[0];
-    if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); }
+    if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); setCharacterId(selected.character_id || ""); }
     setCharacters((characterResult.data ?? []) as Character[]);
   }); }, [router]);
 
@@ -40,6 +40,17 @@ export default function StoryboardPage() {
   }
 
   async function updateShot(id: string, body: Record<string, string>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error((await response.json()).error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, image_url: body.imageUrl ?? shot.image_url, video_url: body.videoUrl ?? shot.video_url, media_status: body.status ?? shot.media_status, error_message: body.error } : shot)); }
+
+  async function bindCharacter(nextCharacterId: string) {
+    if (!currentProjectId) return;
+    setCharacterId(nextCharacterId); setStatus("正在保存整集角色绑定…");
+    const response = await fetch(`/api/storyboard/projects/${currentProjectId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ characterId: nextCharacterId || null }) });
+    const data = await response.json();
+    if (!response.ok) return setStatus(data.error || "保存角色绑定失败");
+    setProjects((current) => current.map((project) => project.id === currentProjectId ? { ...project, character_id: nextCharacterId || undefined } : project));
+    const selectedCharacter = characters.find((character) => character.id === nextCharacterId);
+    setStatus(selectedCharacter ? `已将 ${selectedCharacter.name} V${selectedCharacter.version} 应用到整集分镜` : "已取消整集角色绑定");
+  }
 
   async function batchImages() {
     const pending = shots.filter((shot) => !shot.image_url); if (!pending.length) return setStatus("所有镜头都已有图片");
@@ -82,19 +93,19 @@ export default function StoryboardPage() {
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `${currentTitle || "影动AI分镜"}.srt`; link.click(); URL.revokeObjectURL(url); setStatus("SRT 字幕已导出");
   }
 
-  function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId })); router.push("/dashboard"); }
+  function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterId })); router.push("/dashboard"); }
 
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
     <section className="storyboard-layout">
-      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); setCurrentProjectId(project.id); }}>{project.title}<small>{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
+      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); setCurrentProjectId(project.id); setCharacterId(project.character_id || ""); }}>{project.title}<small>{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
       <div className="storyboard-main">
         <div className="storyboard-head"><p className="eyebrow">NOVEL TO STORYBOARD</p><h1>小说一键拆分镜</h1><p>粘贴一章小说，自动拆镜并批量生成整集图片、视频、配音与字幕。</p></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
-            <div><label>绑定角色</label><select value={characterId} onChange={(e) => setCharacterId(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
+            <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
             <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}><option value="orion">Orion · 电影旁白</option><option value="carina">Carina · 温柔女声</option><option value="zagan">Zagan · 戏剧角色</option><option value="luna">Luna · 亲和女声</option><option value="iris">Iris · 活泼女声</option><option value="perseus">Perseus · 自信男声</option></select></div>
             <div><label>配音语言</label><select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}><option value="zh">普通话</option><option value="en">英语</option><option value="ja">日语</option><option value="auto">自动识别（可尝试粤语）</option></select></div>
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
