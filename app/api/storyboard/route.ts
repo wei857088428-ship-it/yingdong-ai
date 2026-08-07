@@ -4,6 +4,7 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { stableSpeakerVoice } from "@/app/lib/speakerVoice";
+import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string; speaker_voice: "female" | "male" | "neutral" };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -114,11 +115,14 @@ export async function POST(request: Request) {
     const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。每个镜头必须承接上一镜的动作结果，禁止无解释地跳时间、换地点或增加新事件；保持角色、服装、场景与时间连续。${shotCount <= 3 ? "这是质量样片：第1镜必须交代人物目标和危险起因，第2镜让人物作出明确选择并升级冲突，第3镜展示选择造成的直接后果并留下悬念；三镜都必须有自然、推动剧情的对白或旁白，不能只写动作。" : "开头3秒有钩子，中段因果清楚，结尾有悬念。"} emotion 必须写成可执行的演员指令，包含主情绪、强度1-5、语速、音量和一句潜台词；相邻镜头的情绪变化必须有剧情原因。image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。sound 必须写明环境声、动作音效和情绪氛围。当前用户角色库：${characterCatalog}。每个镜头的 character_names 填写画面中确实出现的剧情角色姓名，不要填写版本号、群演或泛称。已有角色必须使用角色库中的准确名称；剧情需要但角色库没有的人物也要保留原姓名，供用户补建角色。没有具名角色时返回空数组。每个镜头的 dialogue 只能由一个角色说话，严禁在同一 dialogue 中写两人对话或用“角色名：”串联台词；需要换人说话时必须放到下一镜。speaker_name 必须填写该唯一说话角色的准确姓名；旁白、无人说话或无法确定时填空字符串。speaker_voice 必须根据原故事中该说话人的明确身份填写 female、male 或 neutral，旁白和无法确定时填 neutral；不要只凭姓名刻板猜测。` }, { role: "user", content: story }] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "分镜生成失败");
     let parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
-    try {
+    let reviewAccepted = false;
+    let reviewFailure = "";
+    for (let reviewAttempt = 0; reviewAttempt < 2 && !reviewAccepted; reviewAttempt++) try {
       const reviewResponse = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         cache: "no-store",
+        signal: AbortSignal.timeout(90_000),
         body: JSON.stringify({
           model: "grok-4.5",
           temperature: 0.2,
@@ -133,11 +137,11 @@ export async function POST(request: Request) {
       const reviewedResult = await reviewResponse.json();
       if (reviewResponse.ok) {
         const reviewed = parseJson(reviewedResult?.choices?.[0]?.message?.content ?? "");
-        if (reviewed.shots?.length === shotCount) parsed = reviewed;
+        if (reviewed.shots?.length === shotCount) { parsed = reviewed; reviewAccepted = true; }
       }
-    } catch {
-      // Keep the first valid draft if the optional continuity review is unavailable.
-    }
+      else reviewFailure = reviewedResult?.error?.message ?? `剧情审校请求失败（${reviewResponse.status}）`;
+    } catch (error) { reviewFailure = error instanceof Error ? error.message : "剧情审校失败"; }
+    if (!reviewAccepted) throw new Error(`剧情连续性审校未通过：${reviewFailure || "返回镜头不完整"}，本次未保存分镜`);
     const parsedShots = (parsed.shots ?? []).slice(0, shotCount);
     const speakerProfiles = new Map<string, "female" | "male">();
     for (const shot of parsedShots) {
@@ -162,7 +166,7 @@ export async function POST(request: Request) {
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
       speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),
-      voice_id: speaker?.voice_id || stableSpeakerVoice(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice),
+      voice_id: normalizeVoiceId(speaker?.voice_id, normalizeVoiceId(stableSpeakerVoice(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice))),
       voice_language: speaker?.voice_language || "zh",
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");

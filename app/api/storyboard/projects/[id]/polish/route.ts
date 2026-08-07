@@ -5,6 +5,7 @@ import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { normalizeSpeakerName, stableSpeakerVoice, type SpeakerVoiceProfile } from "@/app/lib/speakerVoice";
+import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type PolishedShot = { shot_number: number; dialogue: string; sound: string; duration_seconds: number; speaker_name: string; speaker_voice: SpeakerVoiceProfile };
 type Character = { id: string; name: string; voice_id?: string; voice_language?: string };
@@ -35,7 +36,10 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     ] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "对白修复失败");
     const polished = parseJson(result?.choices?.[0]?.message?.content ?? "").shots ?? [];
+    const expectedNumbers = shots.map((shot) => Number(shot.shot_number));
+    const returnedNumbers = polished.map((shot) => Number(shot.shot_number));
     if (polished.length !== shots.length) throw new Error("AI 返回的镜头数量不完整");
+    if (new Set(returnedNumbers).size !== shots.length || expectedNumbers.some((number) => !returnedNumbers.includes(number))) throw new Error("AI 返回的镜头编号重复或缺失，本次未修改分镜");
     const { data: characterRows } = await supabase.from("characters").select("id,name,voice_id,voice_language").eq("user_id", user.id);
     const characters = (characterRows ?? []) as Character[];
     const profiles = new Map<string, "female" | "male">();
@@ -51,13 +55,15 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const namedSpeaker = characters.find((character) => normalizeSpeakerName(character.name) === normalizeSpeakerName(speakerName));
       const speaker = boundSpeaker ?? namedSpeaker;
       const speakerCharacterId = current.speaker_character_id ?? namedSpeaker?.id ?? null;
-      const voiceId = speaker?.voice_id || stableSpeakerVoice(speakerName, profiles.get(normalizeSpeakerName(speakerName)) ?? item.speaker_voice);
+      const voiceId = normalizeVoiceId(speaker?.voice_id, normalizeVoiceId(stableSpeakerVoice(speakerName, profiles.get(normalizeSpeakerName(speakerName)) ?? item.speaker_voice)));
       const voiceChanged = Boolean(item.dialogue.trim()) && (String(current.voice_id ?? "") !== voiceId || (current.speaker_character_id ?? null) !== speakerCharacterId);
       if (voiceChanged) upgradedVoices++;
       const imagePrompt = withContinuityPrompt(String(current.image_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "image");
       const videoPrompt = withContinuityPrompt(String(current.video_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "video");
       if (imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt) upgradedPrompts++;
-      const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds))), image_prompt: imagePrompt, video_prompt: videoPrompt, voice_id: voiceId, voice_language: speaker?.voice_language || current.voice_language || "zh", speaker_character_id: speakerCharacterId };
+      const suggestedDuration = Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds)));
+      const durationSeconds = current.audio_url || current.video_url ? Number(current.duration_seconds) : suggestedDuration;
+      const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: durationSeconds, image_prompt: imagePrompt, video_prompt: videoPrompt, voice_id: voiceId, voice_language: speaker?.voice_language || current.voice_language || "zh", speaker_character_id: speakerCharacterId };
       if (changed || voiceChanged) {
         let reusableVideo = current.video_url ?? null;
         if (current.media_status === "lipsync_ready") reusableVideo = await originalVideoUrl(supabase, user.id, current.project_id, current.id);

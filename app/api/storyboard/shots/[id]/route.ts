@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
+import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 const allowed = ["pending", "image_generating", "image_ready", "video_generating", "lipsync_generating", "lipsync_ready", "completed", "failed"];
 const templates = {
@@ -48,7 +49,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (body.speakerCharacterId) {
       const { data: speaker } = await supabase.from("characters").select("id,voice_id,voice_language").eq("id", body.speakerCharacterId).eq("user_id", user.id).maybeSingle();
       if (!speaker) return NextResponse.json({ error: "说话角色无效" }, { status: 400 });
-      updates.speaker_character_id = speaker.id; updates.voice_id = speaker.voice_id || "orion"; updates.voice_language = speaker.voice_language || "zh";
+      updates.speaker_character_id = speaker.id; updates.voice_id = normalizeVoiceId(speaker.voice_id); updates.voice_language = speaker.voice_language || "zh";
     } else updates.speaker_character_id = null;
     updates.audio_url = null; updates.subtitle_start_ms = null; updates.subtitle_end_ms = null; updates.error_message = null;
     const { data: current } = await supabase.from("storyboard_shots").select("media_status,project_id").eq("id", id).eq("user_id", user.id).maybeSingle();

@@ -1,10 +1,11 @@
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 
 const BUCKET = "generated-videos";
 const MAX_VIDEO_BYTES = 150 * 1024 * 1024;
 let bucketReady: Promise<void> | null = null;
 
 async function ensureBucket() {
+  const supabaseAdmin = getSupabaseAdmin();
   if (!bucketReady) {
     bucketReady = (async () => {
       const { data } = await supabaseAdmin.storage.getBucket(BUCKET);
@@ -25,6 +26,7 @@ function safePart(value: string) {
 }
 
 export async function archiveGeneratedVideo(sourceUrl: string, userId: string, category: "xai" | "lipsync", id: string) {
+  const supabaseAdmin = getSupabaseAdmin();
   const url = new URL(sourceUrl);
   if (url.protocol !== "https:") throw new Error("生成视频地址必须使用 HTTPS");
   await ensureBucket();

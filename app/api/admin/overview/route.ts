@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 
 type Money = { val?: string };
 type BalanceResponse = { total?: Money; message?: string };
@@ -14,6 +14,7 @@ function dollars(value?: string) {
 }
 
 export async function GET() {
+  const supabaseAdmin = getSupabaseAdmin();
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);

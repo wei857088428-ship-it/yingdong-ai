@@ -4,8 +4,9 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { expressiveSpeech } from "@/app/lib/expressiveSpeech";
+import { normalizeVoiceId, officialVoiceIds } from "@/app/lib/voiceCatalog";
 
-const voices = new Set(["ara", "eve", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris", "altair", "zenith", "perseus", "helios", "lux", "kepler"]);
+const voices = new Set<string>(officialVoiceIds);
 const languages = new Set(["zh", "en", "ja", "auto"]);
 type AudioTimestamps = { graph_chars?: string[]; graph_times?: number[][] };
 
@@ -37,7 +38,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (!text) return NextResponse.json({ error: "这个镜头没有对白或旁白" }, { status: 400 });
     const performanceContext = `${String(shot.action ?? "")} ${String(shot.sound ?? "")} ${(shot.character_names ?? []).join(" ")}`;
     const likelyFemale = /苏雨晴|女孩|少女|女人|女性|女主|她/.test(performanceContext) && !shot.speaker_character_id;
-    const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : likelyFemale ? "eve" : voices.has(body.fallbackVoiceId ?? "") ? body.fallbackVoiceId! : "rex";
+    const requestedVoice = normalizeVoiceId(body.voiceId, likelyFemale ? "eve" : "rex");
+    const fallbackVoice = normalizeVoiceId(body.fallbackVoiceId, likelyFemale ? "eve" : "rex");
+    const voiceId = voices.has(requestedVoice) ? requestedVoice : fallbackVoice;
     const performance = expressiveSpeech(text, performanceContext);
     const expressiveText = performance.text;
     const speed = Math.min(1.3, Math.max(0.7, Number(body.speed ?? performance.speed)));
@@ -52,11 +55,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
     const payload = await response.json() as { audio?: string; duration?: number; content_type?: string; audio_timestamps?: AudioTimestamps };
     if (!payload.audio) throw new Error("xAI 配音返回内容为空");
-    const path = `${user.id}/${shot.project_id}/${shot.id}.mp3`;
+    const version = Date.now();
+    const path = `${user.id}/${shot.project_id}/${shot.id}.${version}.mp3`;
     const audio = Uint8Array.from(Buffer.from(payload.audio, "base64"));
-    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: true });
+    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: false });
     if (uploadError) throw uploadError;
-    const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.timings.json`;
+    const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.${version}.timings.json`;
     const timings = new TextEncoder().encode(JSON.stringify({ version: 1, cues: captionCues(text, payload.audio_timestamps) }));
     await supabase.storage.from("storyboard-audio").upload(timingsPath, timings, { contentType: "audio/mpeg", upsert: true });
     const audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
@@ -66,7 +70,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const audioDuration = Math.max(0, Number(payload.duration ?? 0));
     const matchedDuration = Math.min(15, Math.max(2, Math.ceil(audioDuration + 0.35)));
     const endMs = startMs + Math.round(audioDuration * 1000);
-    const updates: Record<string, unknown> = { audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs };
+    const updates: Record<string, unknown> = { audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs, media_status: shot.video_url ? "completed" : "pending", error_message: null };
     if (shot.media_status === "lipsync_ready") {
       const sourceVideo = await originalVideoUrl(supabase, user.id, shot.project_id, shot.id);
       Object.assign(updates, { video_url: sourceVideo, media_status: sourceVideo ? "completed" : "pending", error_message: null });

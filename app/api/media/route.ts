@@ -6,7 +6,7 @@ function allowedMediaHost(hostname: string) {
     try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname; }
     catch { return ""; }
   })();
-  return hostname.endsWith(".x.ai") || Boolean(supabaseHost && hostname === supabaseHost);
+  return hostname.endsWith(".x.ai") || hostname.endsWith(".heygen.ai") || hostname.endsWith(".heygen.com") || Boolean(supabaseHost && hostname === supabaseHost);
 }
 
 export async function GET(request: Request) {
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   catch { return NextResponse.json({ error: "素材地址无效" }, { status: 400 }); }
   if (target.protocol !== "https:" || !allowedMediaHost(target.hostname)) return NextResponse.json({ error: "不允许代理这个素材地址" }, { status: 403 });
 
-  const upstream = await fetch(target, { cache: "no-store" });
+  const upstream = await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(60_000) });
   if (!upstream.ok || !upstream.body) return NextResponse.json({ error: `素材读取失败 (${upstream.status})` }, { status: 502 });
   const headers = new Headers({
     "Content-Type": upstream.headers.get("content-type") ?? "application/octet-stream",
