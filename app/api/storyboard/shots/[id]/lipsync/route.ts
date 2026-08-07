@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
+import { preserveLipSyncSource } from "@/app/lib/lipsyncSource";
 
 const HEYGEN_URL = "https://api.heygen.com/v3/lipsyncs";
 
@@ -33,6 +34,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { supabase, shot } = await ownedShot(id, user.id);
   if (!shot) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
   if (!shot.video_url || !shot.audio_url) return NextResponse.json({ error: "请先生成视频和配音" }, { status: 400 });
+  try { await preserveLipSyncSource(supabase, user.id, shot.project_id, shot.id, String(shot.video_url)); }
+  catch (error) { return NextResponse.json({ error: error instanceof Error ? `保存口型源视频失败：${error.message}` : "保存口型源视频失败" }, { status: 500 }); }
 
   const distantShot = /远景|全景|空镜/.test(String(shot.shot_type ?? ""));
   const intensePerformance = /强度\s*[:：]?\s*[4-5]|大喊|哭|愤怒|惊恐/.test(`${String(shot.sound ?? "")} ${String(shot.action ?? "")}`);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
+import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 
 const allowed = ["pending", "image_generating", "image_ready", "video_generating", "lipsync_generating", "lipsync_ready", "completed", "failed"];
 const templates = {
@@ -50,8 +51,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       updates.speaker_character_id = speaker.id; updates.voice_id = speaker.voice_id || "orion"; updates.voice_language = speaker.voice_language || "zh";
     } else updates.speaker_character_id = null;
     updates.audio_url = null; updates.subtitle_start_ms = null; updates.subtitle_end_ms = null; updates.error_message = null;
-    const { data: current } = await supabase.from("storyboard_shots").select("media_status").eq("id", id).eq("user_id", user.id).maybeSingle();
-    if (current?.media_status === "lipsync_ready") { updates.video_url = null; updates.media_status = "pending"; }
+    const { data: current } = await supabase.from("storyboard_shots").select("media_status,project_id").eq("id", id).eq("user_id", user.id).maybeSingle();
+    if (current?.media_status === "lipsync_ready") {
+      const sourceVideo = await originalVideoUrl(supabase, user.id, current.project_id, id);
+      updates.video_url = sourceVideo; updates.media_status = sourceVideo ? "completed" : "pending";
+    }
   }
   const { data, error } = await supabase.from("storyboard_shots").update(updates).eq("id", id).eq("user_id", user.id).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
