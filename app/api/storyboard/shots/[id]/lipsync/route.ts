@@ -34,8 +34,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!shot) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
   if (!shot.video_url || !shot.audio_url) return NextResponse.json({ error: "请先生成视频和配音" }, { status: 400 });
 
-  const closeShot = /特写|近景/.test(String(shot.shot_type ?? ""));
-  const mode = body.mode === "speed" || body.mode === "precision" ? body.mode : closeShot ? "precision" : "speed";
+  const distantShot = /远景|全景|空镜/.test(String(shot.shot_type ?? ""));
+  const intensePerformance = /强度\s*[:：]?\s*[4-5]|大喊|哭|愤怒|惊恐/.test(`${String(shot.sound ?? "")} ${String(shot.action ?? "")}`);
+  const mode = body.mode === "speed" || body.mode === "precision" ? body.mode : !distantShot || intensePerformance ? "precision" : "speed";
   let audioUrl = String(shot.audio_url);
   if (body.paddedAudioBase64) {
     const encoded = body.paddedAudioBase64.replace(/^data:audio\/wav;base64,/, "");
