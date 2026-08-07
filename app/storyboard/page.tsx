@@ -114,7 +114,7 @@ export default function StoryboardPage() {
 
   async function batchImages() {
     const pending = shots.filter((shot) => !shot.image_url); if (!pending.length) return setStatus("所有镜头都已有图片");
-    const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
+    const quality = qualityReport(pending, { includePerformance: false }); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
     const workingImages=shots.map((shot)=>({...shot}));
@@ -125,6 +125,7 @@ export default function StoryboardPage() {
 
   async function batchVideos() {
     const pending = shots.filter((shot) => shot.image_url && !shot.video_url); if (!pending.length) return setStatus("没有等待转视频的分镜图片");
+    const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量视频已暂停：${quality.critical.slice(0,3).join("；")}`);
     const videoCreditCost=videoResolution==="720p"?112:80;const estimatedXai=pending.reduce((sum,shot)=>sum+Math.min(15,shot.duration_seconds)*(videoResolution==="720p"?.07:.05),0);
     if (!window.confirm(`将以 ${videoResolution} 生成 ${pending.length} 段视频，预计消耗 ${pending.length * videoCreditCost} 积分，xAI API 约 $${estimatedXai.toFixed(2)} 美元。过程可能需要较长时间，确定继续吗？`)) return;
     setBatching(true);
@@ -135,6 +136,7 @@ export default function StoryboardPage() {
   async function batchVoices() {
     const pending = shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url);
     if (!pending.length) return setStatus("所有有对白的镜头都已有配音");
+    const quality = qualityReport(pending, { includeVisual: false, includeCharacters: false }); if (quality.critical.length) return setStatus(`批量配音已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 段配音，预计消耗 ${pending.length * 2} 积分。确定继续吗？`)) return;
     setBatching(true);
     for (let index = 0; index < pending.length; index++) {
@@ -151,6 +153,7 @@ export default function StoryboardPage() {
 
   async function regenerateVoice(shot: Shot) {
     if (batching || !shot.dialogue?.trim()) return;
+    const quality = qualityReport([shot], { includeVisual: false, includeCharacters: false }); if (quality.critical.length) return setStatus(`重新配音已暂停：${quality.critical.join("；")}`);
     if (!window.confirm(`将重新生成镜头 ${shot.shot_number} 的配音，预计消耗 2 积分。确定继续吗？`)) return;
     setBatching(true); setStatus(`正在重新配音 · 镜头 ${shot.shot_number}`);
     try {
@@ -171,22 +174,34 @@ export default function StoryboardPage() {
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
   const requiresLipSync = (shot: Shot) => Boolean(shot.dialogue?.trim() && shot.speaker_character_id);
   const needsProductionRetry = (shot: Shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message) || !shot.image_url || !shot.video_url || Boolean(shot.dialogue?.trim()&&!shot.audio_url) || (requiresLipSync(shot)&&!isLipSynced(shot));
-  function qualityReport(items: Shot[]) {
+  function qualityReport(items: Shot[], options: { includePerformance?: boolean; includeVisual?: boolean; includeCharacters?: boolean } = {}) {
+    const includePerformance = options.includePerformance ?? true;
+    const includeVisual = options.includeVisual ?? true;
+    const includeCharacters = options.includeCharacters ?? true;
     const critical: string[] = []; const warnings: string[] = [];
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
-      if (!shot.image_prompt?.trim() || !shot.video_prompt?.trim()) critical.push(`${label} 缺少图片或视频提示词`);
+      if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
       const spoken = Array.from((shot.dialogue || "").replace(/[\s，。！？、…,.!?]/g, "")).length;
-      if (spoken > shot.duration_seconds * 4.8) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），口型可能显得赶`);
+      const mildDialogueLimit = shot.duration_seconds * 4.2;
+      const severeDialogueLimit = shot.duration_seconds * 5.2;
+      if (includePerformance && spoken > severeDialogueLimit) critical.push(`${label} 台词严重超长（${spoken} 字/${shot.duration_seconds} 秒），必须缩短或延长镜头后再配音`);
+      else if (includePerformance && spoken > mildDialogueLimit) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），建议缩短以保留情绪和呼吸空间`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
-      if (shot.dialogue?.trim() && !/(?:表演|情绪|强度)/.test(shot.sound || "")) warnings.push(`${label} 缺少明确情绪表演指令`);
-      const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
-      const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
-      const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
-      if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
-      if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
-      for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+      const performance = shot.sound || "";
+      const hasPerformanceDirection = /(?:表演|情绪|语气|口吻)\s*[:：]\s*\S+/.test(performance)
+        && /强度\s*[:：]?\s*[1-5]/.test(performance)
+        && /(?:语速|速度|节奏|音量|轻声|低声|大喊|耳语)/.test(performance);
+      if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
+      if (includeCharacters) {
+        const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
+        const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
+        const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
+        if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
+        if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
+        for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+      }
     }
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
   }
