@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
+import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 
 type PolishedShot = { shot_number: number; dialogue: string; sound: string; duration_seconds: number };
 
@@ -42,7 +43,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const videoPrompt = withContinuityPrompt(String(current.video_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "video");
       if (imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt) upgradedPrompts++;
       const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds))), image_prompt: imagePrompt, video_prompt: videoPrompt };
-      if (changed) Object.assign(updates, { audio_url: null, video_url: null, subtitle_start_ms: null, subtitle_end_ms: null, media_status: "pending", error_message: null });
+      if (changed) {
+        let reusableVideo = current.video_url ?? null;
+        if (current.media_status === "lipsync_ready") reusableVideo = await originalVideoUrl(supabase, user.id, current.project_id, current.id);
+        Object.assign(updates, { audio_url: null, video_url: reusableVideo, subtitle_start_ms: null, subtitle_end_ms: null, media_status: reusableVideo ? "completed" : "pending", error_message: null });
+      }
       const { error } = await supabase.from("storyboard_shots").update(updates).eq("id", current.id).eq("user_id", user.id); if (error) throw error;
     }
     const { data: updated } = await supabase.from("storyboard_shots").select("*").eq("project_id", id).eq("user_id", user.id).order("shot_number");
