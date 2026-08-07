@@ -127,7 +127,11 @@ export default function StoryboardPage() {
     finally { setBatching(false); }
   }
 
-  const lipSyncMode = (shot: Shot) => /特写|近景/.test(shot.shot_type || "") ? "precision" : "speed";
+  const lipSyncMode = (shot: Shot) => {
+    const distant = /远景|全景|空镜/.test(shot.shot_type || "");
+    const intense = /强度\s*[:：]?\s*[4-5]|大喊|哭|愤怒|惊恐/.test(`${shot.sound || ""} ${shot.action || ""}`);
+    return !distant || intense ? "precision" : "speed";
+  };
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
   function qualityReport(items: Shot[]) {
     const critical: string[] = []; const warnings: string[] = [];
