@@ -4,12 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = join(root, "node_modules", "@ffmpeg", "core", "dist", "umd");
-const target = join(root, "public", "ffmpeg");
+const target = join(root, "public", "render-engine");
 
 await mkdir(target, { recursive: true });
 await Promise.all([
-  copyFile(join(source, "ffmpeg-core.js"), join(target, "ffmpeg-core.js")),
-  copyFile(join(source, "ffmpeg-core.wasm"), join(target, "ffmpeg-core.wasm")),
+  copyFile(join(source, "ffmpeg-core.js"), join(target, "core.js")),
+  copyFile(join(source, "ffmpeg-core.wasm"), join(target, "core.wasm")),
 ]);
 
-console.log("FFmpeg core copied to public/ffmpeg");
+console.log("Video render core copied to public/render-engine");
