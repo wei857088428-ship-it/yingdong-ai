@@ -6,8 +6,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/app/lib/supabase";
 
-type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; image_url?:string; video_url?:string; audio_url?:string; voice_id?:string; subtitle_start_ms?:number; subtitle_end_ms?:number };
+type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; image_url?:string; video_url?:string; audio_url?:string; voice_id?:string; media_status?:string; subtitle_start_ms?:number; subtitle_end_ms?:number };
 type Project = { id:string; title:string; created_at:string; storyboard_shots:Shot[] };
+
+function hasEmbeddedVoice(item: Shot) { return item.media_status === "lipsync_ready" || /heygen/i.test(item.video_url || ""); }
 
 async function subtitleOverlay(text:string) {
   const canvas=document.createElement("canvas"); canvas.width=720; canvas.height=1280; const context=canvas.getContext("2d"); if(!context) throw new Error("浏览器无法创建字幕画布");
@@ -29,7 +31,7 @@ export default function EpisodePage() {
   useEffect(() => { const probes=shots.filter((item)=>item.video_url&&!mediaDurations[item.id]).map((item)=>{const video=document.createElement("video");video.preload="metadata";video.onloadedmetadata=()=>{if(Number.isFinite(video.duration)&&video.duration>0)setMediaDurations((current)=>({...current,[item.id]:video.duration}));};video.src=item.video_url!;return video;});return()=>probes.forEach((video)=>{video.removeAttribute("src");video.load();});},[shots,mediaDurations]);
   useEffect(() => { if(!playing || !shot) return; videoRef.current?.play().catch(()=>undefined); audioRef.current?.play().catch(()=>undefined); const duration=mediaDurations[shot.id]??shot.duration_seconds; const started=Date.now(); const timer=window.setInterval(()=>{ const seconds=(Date.now()-started)/1000; setElapsed(Math.min(seconds,duration)); if(seconds>=duration){ window.clearInterval(timer); if(index<shots.length-1){setElapsed(0);setIndex((value)=>value+1);} else setPlaying(false); } },100); return()=>window.clearInterval(timer); },[playing,index,shot,shots.length,mediaDurations]);
   useEffect(() => { if(!playing)return; videoRef.current?.play().catch(()=>undefined); audioRef.current?.play().catch(()=>undefined); },[index,playing]);
-  useEffect(() => { if(videoRef.current) videoRef.current.volume=shot?.audio_url?0.2:1; },[shot]);
+  useEffect(() => { if(videoRef.current) videoRef.current.volume=shot&&hasEmbeddedVoice(shot)?1:shot?.audio_url?0.2:1; },[shot]);
 
   function toggle(){ if(!shot)return; if(playing){videoRef.current?.pause();audioRef.current?.pause();setPlaying(false);} else setPlaying(true); }
   function selectShot(next:number){ setElapsed(0); setIndex(Math.min(shots.length-1,Math.max(0,next))); }
@@ -40,15 +42,15 @@ export default function EpisodePage() {
       for(let i=0;i<shots.length;i++){
         const item=shots[i];const duration=String(Math.max(2,mediaDurations[item.id]??item.duration_seconds));const fadeOut=Math.max(0,Number(duration)-0.12).toFixed(3);const captionDuration=subtitleDuration(item).toFixed(3);
         setExportStatus(`正在渲染镜头 ${i+1}/${shots.length}…`);setExportProgress(Math.round(i/shots.length*90));
-        const visual=item.video_url||item.image_url!;const sourceName=`visual-${i}.${item.video_url?"mp4":"img"}`;const audioName=`audio-${i}.mp3`;const subtitleName=`subtitle-${i}.png`;const segmentName=`segment-${i}.mp4`;const proxy=(url:string)=>`/api/media?url=${encodeURIComponent(url)}`;
-        await ffmpeg.writeFile(sourceName,await fetchFile(proxy(visual)));if(item.audio_url)await ffmpeg.writeFile(audioName,await fetchFile(proxy(item.audio_url)));await ffmpeg.writeFile(subtitleName,await fetchFile(await subtitleOverlay(item.dialogue||"")));
-        const sourceArgs=item.video_url?["-i",sourceName]:["-loop","1","-framerate","30","-t",duration,"-i",sourceName];const audioArgs=item.audio_url?["-i",audioName]:["-f","lavfi","-t",duration,"-i","anullsrc=channel_layout=stereo:sample_rate=44100"];
+        const visual=item.video_url||item.image_url!;const sourceName=`visual-${i}.${item.video_url?"mp4":"img"}`;const audioName=`audio-${i}.mp3`;const subtitleName=`subtitle-${i}.png`;const segmentName=`segment-${i}.mp4`;const proxy=(url:string)=>`/api/media?url=${encodeURIComponent(url)}`;const separateVoice=Boolean(item.audio_url&&!hasEmbeddedVoice(item));
+        await ffmpeg.writeFile(sourceName,await fetchFile(proxy(visual)));if(separateVoice)await ffmpeg.writeFile(audioName,await fetchFile(proxy(item.audio_url!)));await ffmpeg.writeFile(subtitleName,await fetchFile(await subtitleOverlay(item.dialogue||"")));
+        const sourceArgs=item.video_url?["-i",sourceName]:["-loop","1","-framerate","30","-t",duration,"-i",sourceName];const audioArgs=separateVoice?["-i",audioName]:["-f","lavfi","-t",duration,"-i","anullsrc=channel_layout=stereo:sample_rate=44100"];
         const videoFilter=`[0:v]scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1,tpad=stop_mode=clone:stop_duration=${duration},fade=t=in:st=0:d=.12,fade=t=out:st=${fadeOut}:d=.12[base];[base][2:v]overlay=0:0:format=auto:enable='between(t,0,${captionDuration})'[v]`;
-        const voiceFilter=item.audio_url?`volume=2,loudnorm=I=-16:TP=-1.5:LRA=11,apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12`:`apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12`;
+        const voiceFilter=separateVoice?`volume=2,loudnorm=I=-16:TP=-1.5:LRA=11,apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12`:`apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12`;
         const commonArgs=["-t",duration,"-r","30","-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p","-c:a","aac","-ar","44100","-ac","2","-movflags","+faststart",segmentName];
         let rendered=false;
         if(item.video_url){
-          const mixedAudio=item.audio_url?`[0:a]volume=.18,aresample=44100,apad[amb];[1:a]${voiceFilter}[voice];[amb][voice]amix=inputs=2:duration=longest:dropout_transition=0[a]`:`[0:a]volume=.85,aresample=44100,apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12[a]`;
+          const mixedAudio=separateVoice?`[0:a]volume=.18,aresample=44100,apad[amb];[1:a]${voiceFilter}[voice];[amb][voice]amix=inputs=2:duration=longest:dropout_transition=0[a]`:`[0:a]volume=.85,aresample=44100,apad,afade=t=in:st=0:d=.08,afade=t=out:st=${fadeOut}:d=.12[a]`;
           const mixedExit=await ffmpeg.exec([...sourceArgs,...audioArgs,"-loop","1","-i",subtitleName,"-filter_complex",`${videoFilter};${mixedAudio}`,"-map","[v]","-map","[a]",...commonArgs]);rendered=mixedExit===0;
           if(!rendered) await ffmpeg.deleteFile(segmentName).catch(()=>undefined);
         }
@@ -64,7 +66,7 @@ export default function EpisodePage() {
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href={`/storyboard?project=${params.id}`}>返回分镜</Link></header>
     <section className="episode-editor">
       <div className="episode-stage">
-        <div className="episode-phone">{shot.video_url ? <video className="episode-visual" key={shot.id} ref={videoRef} src={shot.video_url} playsInline/> : shot.image_url ? <Image className="episode-visual" key={shot.id} src={shot.image_url} alt={shot.scene} fill unoptimized/> : <div className="episode-placeholder">镜头 {shot.shot_number}<small>{shot.scene}</small></div>}{shot.audio_url&&<audio ref={audioRef} src={shot.audio_url}/>} {shot.dialogue&&(!playing||elapsed<=subtitleDuration(shot))&&<div className="episode-subtitle" key={`subtitle-${shot.id}`}>{shot.dialogue}</div>}</div>
+        <div className="episode-phone">{shot.video_url ? <video className="episode-visual" key={shot.id} ref={videoRef} src={shot.video_url} playsInline/> : shot.image_url ? <Image className="episode-visual" key={shot.id} src={shot.image_url} alt={shot.scene} fill unoptimized/> : <div className="episode-placeholder">镜头 {shot.shot_number}<small>{shot.scene}</small></div>}{shot.audio_url&&!hasEmbeddedVoice(shot)&&<audio ref={audioRef} src={shot.audio_url}/>} {shot.dialogue&&(!playing||elapsed<=subtitleDuration(shot))&&<div className="episode-subtitle" key={`subtitle-${shot.id}`}>{shot.dialogue}</div>}</div>
         <div className="episode-controls"><button onClick={()=>selectShot(index-1)}>上一镜</button><button className="episode-play" onClick={toggle}>{playing?"暂停":"播放整集"}</button><button onClick={()=>selectShot(index+1)}>下一镜</button></div>
       </div>
       <div className="episode-panel"><p className="eyebrow">AUTO EDIT TIMELINE</p><h1>{project.title}</h1><p>视频、配音与字幕已按镜头顺序自动排列。</p><div className="episode-summary"><b>{shots.length} 镜</b><b>{total.toFixed(1)} 秒</b><b>{shots.filter(item=>item.video_url).length} 段视频</b><b>{shots.filter(item=>item.audio_url).length} 段配音</b></div><div className="episode-progress"><i style={{width:`${Math.min(100,(before+elapsed)/Math.max(total,1)*100)}%`}}/></div><div className="episode-timeline">{shots.map((item,i)=>{const duration=mediaDurations[item.id]??item.duration_seconds;return <button className={i===index?"active":""} key={item.id} onClick={()=>selectShot(i)} style={{flexGrow:duration}}><b>{String(item.shot_number).padStart(2,"0")}</b><small>{duration.toFixed(1)}s</small><span>{item.video_url?"视频":"图片"}{item.audio_url?" + 配音":""}</span></button>;})}</div><div className="episode-export-actions"><button className="episode-export" disabled={exporting} onClick={()=>void exportMp4()}>{exporting?"正在渲染 MP4…":"自动剪辑并导出 MP4"}</button><button onClick={downloadManifest}>导出剪辑工程 JSON</button></div>{(exporting||exportProgress>0)&&<div className="episode-render-progress"><i style={{width:`${exportProgress}%`}}/></div>}{exportStatus&&<small className="episode-note">{exportStatus}</small>}<small className="episode-note">MP4 在当前电脑本地渲染，不额外消耗生成积分。导出时请保持页面打开。</small></div>
