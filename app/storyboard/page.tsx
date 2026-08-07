@@ -11,6 +11,7 @@ import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 import { storyTemplates, type StoryTemplate } from "@/app/lib/storyTemplates";
 import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storyboardCharacterLimit";
 import { lipSyncPollDecision } from "@/app/lib/lipsyncPolling";
+import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -212,11 +213,7 @@ export default function StoryboardPage() {
       const speakerLabels = [...(shot.dialogue || "").matchAll(/(?:^|[\n。！？!?]\s*)([\p{L}\p{N}_·]{1,12})\s*[：:]/gu)].map((match) => match[1].trim());
       if (includePerformance && new Set(speakerLabels).size > 1) critical.push(`${label} 同时包含多个说话人（${[...new Set(speakerLabels)].join("、")}），必须拆成一人一镜再配音和同步口型`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
-      const performance = shot.sound || "";
-      const hasPerformanceDirection = /(?:表演|情绪|语气|口吻)\s*[:：]\s*\S+/.test(performance)
-        && /强度\s*[:：]?\s*[1-5]/.test(performance)
-        && /(?:语速|速度|节奏|音量|轻声|低声|大喊|耳语)/.test(performance);
-      if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
+      if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection(shot.sound)) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
       if (includeCharacters) {
         const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
         const visibleCharacterCount = uniqueCharacterCount(expectedNames);
