@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 
 export async function getCurrentUser() {
@@ -8,10 +10,16 @@ export async function getCurrentUser() {
     error,
   } = await supabase.auth.getUser();
 
-  if (error) {
-    console.error("Get current user failed:", error);
-    return null;
-  }
+  if (error || !user) return null;
 
-  return user;
+  // Paid resources are only available to verified identities. This also
+  // protects deployments where Supabase email confirmation was accidentally
+  // relaxed in the dashboard.
+  const identityConfirmed = user.email
+    ? Boolean(user.email_confirmed_at)
+    : user.phone
+      ? Boolean(user.phone_confirmed_at)
+      : false;
+
+  return identityConfirmed ? user : null;
 }

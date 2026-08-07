@@ -36,8 +36,11 @@ export async function GET(request: NextRequest) {
     const providerParam =
       request.nextUrl.searchParams.get("provider") ?? "xai";
 
-    const provider: Provider =
-      providerParam === "kling" ? "kling" : "xai";
+    if (providerParam !== "xai" && providerParam !== "kling") {
+      return NextResponse.json({ error: "不支持的视频服务" }, { status: 400 });
+    }
+
+    const provider: Provider = providerParam;
 
     const requestId =
       request.nextUrl.searchParams.get("requestId") ||
@@ -48,6 +51,9 @@ export async function GET(request: NextRequest) {
         { error: "缺少视频任务 ID" },
         { status: 400 }
       );
+    }
+    if (!/^[A-Za-z0-9_-]{4,200}$/.test(requestId)) {
+      return NextResponse.json({ error: "视频任务 ID 无效" }, { status: 400 });
     }
 
     // 3. 根据平台查询
@@ -68,6 +74,19 @@ export async function GET(request: NextRequest) {
 
 async function getXaiVideoStatus(requestId: string, userId: string) {
   const supabase = await createServerSupabaseClient();
+  const { data: work, error: workError } = await supabase
+    .from("works")
+    .select("id,conversation_id,usage_event_id,status,url")
+    .eq("provider_task_id", requestId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (workError) return NextResponse.json({ error: "读取视频任务失败" }, { status: 500 });
+  if (!work) return NextResponse.json({ error: "视频任务不存在" }, { status: 404 });
+  if (work.status === "completed" && work.url) {
+    return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status: "done", progress: 100, videoUrl: work.url });
+  }
+
   const apiKey = process.env.XAI_API_KEY;
 
   if (!apiKey) {
@@ -115,22 +134,20 @@ async function getXaiVideoStatus(requestId: string, userId: string) {
     data?.output?.video_url ||
     null;
 
-  const { data: work } = await supabase.from("works").select("id,conversation_id,usage_event_id,status,url").eq("provider_task_id", requestId).eq("user_id", userId).maybeSingle();
   if (work && work.status === "processing" && status === "done" && videoUrl) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, true) : null;
     try { videoUrl = await archiveGeneratedVideo(videoUrl, userId, "xai", requestId); }
     catch (error) { console.error("Archive xAI video failed; using provider URL:", error); }
     await Promise.all([
-      supabase.from("works").update({ status: "completed", url: videoUrl, updated_at: new Date().toISOString() }).eq("id", work.id),
+      supabase.from("works").update({ status: "completed", url: videoUrl, updated_at: new Date().toISOString() }).eq("id", work.id).eq("user_id", userId),
       supabase.from("messages").insert({ conversation_id: work.conversation_id, user_id: userId, role: "assistant", content: "视频已经生成完成。", media_url: videoUrl, media_type: "video" }),
-      supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", work.conversation_id),
+      supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", work.conversation_id).eq("user_id", userId),
     ]);
     return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status, progress: data?.progress ?? null, videoUrl, credits });
   }
-  if (work?.status === "completed" && work.url) return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status: "done", progress: 100, videoUrl: work.url });
   if (work && work.status === "processing" && ["failed", "expired"].includes(status)) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, false) : null;
-    await supabase.from("works").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", work.id);
+    await supabase.from("works").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", work.id).eq("user_id", userId);
     return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status, progress: data?.progress ?? null, videoUrl, credits });
   }
 
@@ -141,8 +158,6 @@ async function getXaiVideoStatus(requestId: string, userId: string) {
     status,
     progress: data?.progress ?? null,
     videoUrl,
-    video: data?.video ?? null,
-    raw: data,
   });
 }
 

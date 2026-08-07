@@ -17,7 +17,9 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) return setMessage(error.message);
-    router.push("/dashboard"); router.refresh();
+    const requestedPath = new URLSearchParams(window.location.search).get("next");
+    const allowedPath = requestedPath && ["/dashboard", "/characters", "/storyboard", "/episode/", "/admin"].some((path) => requestedPath === path || requestedPath.startsWith(`${path}/`) || path.endsWith("/") && requestedPath.startsWith(path));
+    router.replace(allowedPath ? requestedPath : "/dashboard"); router.refresh();
   }
 
   return <main className="auth-page"><form className="auth-card" onSubmit={signIn}><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><h1>欢迎回来</h1><p>登录后继续你的 AI 创作。</p>{message && <div className="auth-message">{message}</div>}<label htmlFor="email">邮箱</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com"/><label htmlFor="password">密码</label><input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="输入密码"/><button className="auth-submit" disabled={loading}>{loading ? "正在登录…" : "登录"}</button><p className="auth-switch">还没有账号？ <Link href="/register">免费注册</Link></p></form></main>;

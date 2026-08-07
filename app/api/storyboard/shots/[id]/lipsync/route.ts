@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
+import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 import { preserveLipSyncSource } from "@/app/lib/lipsyncSource";
 import { archiveGeneratedVideo } from "@/app/lib/mediaArchive";
 
@@ -81,6 +82,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const data = dataOf(payload);
   const jobId = String(data.id ?? data.lipsync_id ?? data.job_id ?? "");
   if (!jobId) return NextResponse.json({ error: "HeyGen 未返回任务编号" }, { status: 502 });
+  const { error: persistJobError } = await getSupabaseAdmin()
+    .from("provider_jobs")
+    .insert({ id: jobId, user_id: user.id, resource_id: id, provider: "heygen_lipsync" });
+  if (persistJobError) return NextResponse.json({ error: "保存口型同步任务失败" }, { status: 500 });
   return NextResponse.json({ jobId, mode });
 }
 
@@ -95,6 +100,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
   const { supabase, shot } = await ownedShot(id, user.id);
   if (!shot) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
+  const { data: ownedJob } = await getSupabaseAdmin()
+    .from("provider_jobs")
+    .select("id")
+    .eq("id", jobId)
+    .eq("user_id", user.id)
+    .eq("resource_id", id)
+    .eq("provider", "heygen_lipsync")
+    .maybeSingle();
+  if (!ownedJob) return NextResponse.json({ error: "口型同步任务不存在" }, { status: 404 });
   const response = await fetch(`${HEYGEN_URL}/${encodeURIComponent(jobId)}`, { headers: { "X-Api-Key": apiKey }, cache: "no-store" });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) return NextResponse.json({ error: messageOf(payload, "查询 HeyGen 任务失败") }, { status: response.status });

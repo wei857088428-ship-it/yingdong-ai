@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   catch { return NextResponse.json({ error: "素材地址无效" }, { status: 400 }); }
   if (target.protocol !== "https:" || !allowedMediaHost(target.hostname)) return NextResponse.json({ error: "不允许代理这个素材地址" }, { status: 403 });
 
-  const upstream = await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(60_000) });
+  const upstream = await fetch(target, { cache: "no-store", redirect: "error", signal: AbortSignal.timeout(60_000) });
   if (!upstream.ok || !upstream.body) return NextResponse.json({ error: `素材读取失败 (${upstream.status})` }, { status: 502 });
   const headers = new Headers({
     "Content-Type": upstream.headers.get("content-type") ?? "application/octet-stream",

@@ -29,6 +29,15 @@ export async function POST(request: Request) {
     const prompt = body.prompt?.trim();
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
+    if (conversationId) {
+      const { data: ownedConversation } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!ownedConversation) return NextResponse.json({ error: "对话不存在" }, { status: 404 });
+    }
     if (!conversationId) {
       const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "image" }).select("id").single();
       if (error) throw error; conversationId = data.id;

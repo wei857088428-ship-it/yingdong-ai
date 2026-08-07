@@ -5,11 +5,11 @@ import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const supabaseAdmin = getSupabaseAdmin();
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
   if (!user.email || !admins.includes(user.email.toLowerCase())) return NextResponse.json({ error: "当前账号没有管理员权限" }, { status: 403 });
+  const supabaseAdmin = getSupabaseAdmin();
 
   const body = (await request.json()) as { amount?: number };
   const amount = Math.floor(Number(body.amount));

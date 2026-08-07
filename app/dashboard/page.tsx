@@ -81,7 +81,16 @@ export default function Dashboard() {
     finally { setLoading(false); }
   }
 
-  async function signOut() { await supabase.auth.signOut(); router.replace("/"); router.refresh(); }
+  async function signOut() {
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    if (!response.ok && response.status !== 401) {
+      setStatus("退出登录失败，请重试");
+      return;
+    }
+    await supabase.auth.signOut({ scope: "local" });
+    router.replace("/");
+    router.refresh();
+  }
 
 
   function handleImage(event: ChangeEvent<HTMLInputElement>) {

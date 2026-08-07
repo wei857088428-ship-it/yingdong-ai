@@ -14,13 +14,13 @@ function dollars(value?: string) {
 }
 
 export async function GET() {
-  const supabaseAdmin = getSupabaseAdmin();
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const admins = (process.env.ADMIN_EMAILS ?? "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
   if (!user.email || !admins.includes(user.email.toLowerCase())) {
     return NextResponse.json({ error: "当前账号没有管理员权限", needsAdminConfig: admins.length === 0 }, { status: 403 });
   }
+  const supabaseAdmin = getSupabaseAdmin();
 
   const managementKey = process.env.XAI_MANAGEMENT_API_KEY;
   const teamId = process.env.XAI_TEAM_ID;

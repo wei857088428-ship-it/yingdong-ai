@@ -23,6 +23,15 @@ export async function POST(request: Request) {
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: "AI 视频服务尚未配置" }, { status: 500 });
     let conversationId = body.conversationId;
+    if (conversationId) {
+      const { data: ownedConversation } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!ownedConversation) return NextResponse.json({ error: "对话不存在" }, { status: 404 });
+    }
     if (!conversationId) {
       const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title: prompt.slice(0, 36), mode: "video" }).select("id").single();
       if (error) throw error; conversationId = data.id;
