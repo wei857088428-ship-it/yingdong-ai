@@ -71,7 +71,7 @@ export default function StoryboardPage() {
     const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
     const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
     const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = !sharesCharacter && currentIds.length >= 3;
-    const continuityImage = previous.image_url || (sharesCharacter ? styleImage : undefined);
+    const continuityImage = previous.image_url;
     const referenceImage = continuityImage && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? continuityImage : undefined;
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
@@ -114,17 +114,18 @@ export default function StoryboardPage() {
 
   async function batchImages() {
     const pending = shots.filter((shot) => !shot.image_url); if (!pending.length) return setStatus("所有镜头都已有图片");
-    const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
+    const quality = qualityReport(pending, { includePerformance: false }); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
-    let previousShot = shots.filter((shot) => shot.shot_number < pending[0].shot_number && shot.image_url).toSorted((a,b) => b.shot_number-a.shot_number)[0];
+    const workingImages=shots.map((shot)=>({...shot}));
     let styleImage = shots.filter((shot) => shot.image_url).toSorted((a,b) => a.shot_number-b.shot_number)[0]?.image_url;
-    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;previousShot={...shot,image_url:data.imageUrl}; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
+    for (let index = 0; index < pending.length; index++) { const shot = pending[index];const shotIndex=workingImages.findIndex((item)=>item.id===shot.id);const previousShot=workingImages.slice(0,Math.max(0,shotIndex)).toReversed().find((item)=>item.image_url); setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); const updated=await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" });if(shotIndex>=0)workingImages[shotIndex]=updated;styleImage ||= data.imageUrl; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
     setBatching(false); setStatus("批量图片生成完成");
   }
 
   async function batchVideos() {
     const pending = shots.filter((shot) => shot.image_url && !shot.video_url); if (!pending.length) return setStatus("没有等待转视频的分镜图片");
+    const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量视频已暂停：${quality.critical.slice(0,3).join("；")}`);
     const videoCreditCost=videoResolution==="720p"?112:80;const estimatedXai=pending.reduce((sum,shot)=>sum+Math.min(15,shot.duration_seconds)*(videoResolution==="720p"?.07:.05),0);
     if (!window.confirm(`将以 ${videoResolution} 生成 ${pending.length} 段视频，预计消耗 ${pending.length * videoCreditCost} 积分，xAI API 约 $${estimatedXai.toFixed(2)} 美元。过程可能需要较长时间，确定继续吗？`)) return;
     setBatching(true);
@@ -135,6 +136,7 @@ export default function StoryboardPage() {
   async function batchVoices() {
     const pending = shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url);
     if (!pending.length) return setStatus("所有有对白的镜头都已有配音");
+    const quality = qualityReport(pending, { includeVisual: false, includeCharacters: false }); if (quality.critical.length) return setStatus(`批量配音已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 段配音，预计消耗 ${pending.length * 2} 积分。确定继续吗？`)) return;
     setBatching(true);
     for (let index = 0; index < pending.length; index++) {
@@ -151,6 +153,7 @@ export default function StoryboardPage() {
 
   async function regenerateVoice(shot: Shot) {
     if (batching || !shot.dialogue?.trim()) return;
+    const quality = qualityReport([shot], { includeVisual: false, includeCharacters: false }); if (quality.critical.length) return setStatus(`重新配音已暂停：${quality.critical.join("；")}`);
     if (!window.confirm(`将重新生成镜头 ${shot.shot_number} 的配音，预计消耗 2 积分。确定继续吗？`)) return;
     setBatching(true); setStatus(`正在重新配音 · 镜头 ${shot.shot_number}`);
     try {
@@ -171,22 +174,34 @@ export default function StoryboardPage() {
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
   const requiresLipSync = (shot: Shot) => Boolean(shot.dialogue?.trim() && shot.speaker_character_id);
   const needsProductionRetry = (shot: Shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message) || !shot.image_url || !shot.video_url || Boolean(shot.dialogue?.trim()&&!shot.audio_url) || (requiresLipSync(shot)&&!isLipSynced(shot));
-  function qualityReport(items: Shot[]) {
+  function qualityReport(items: Shot[], options: { includePerformance?: boolean; includeVisual?: boolean; includeCharacters?: boolean } = {}) {
+    const includePerformance = options.includePerformance ?? true;
+    const includeVisual = options.includeVisual ?? true;
+    const includeCharacters = options.includeCharacters ?? true;
     const critical: string[] = []; const warnings: string[] = [];
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
-      if (!shot.image_prompt?.trim() || !shot.video_prompt?.trim()) critical.push(`${label} 缺少图片或视频提示词`);
+      if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
       const spoken = Array.from((shot.dialogue || "").replace(/[\s，。！？、…,.!?]/g, "")).length;
-      if (spoken > shot.duration_seconds * 4.8) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），口型可能显得赶`);
+      const mildDialogueLimit = shot.duration_seconds * 4.2;
+      const severeDialogueLimit = shot.duration_seconds * 5.2;
+      if (includePerformance && spoken > severeDialogueLimit) critical.push(`${label} 台词严重超长（${spoken} 字/${shot.duration_seconds} 秒），必须缩短或延长镜头后再配音`);
+      else if (includePerformance && spoken > mildDialogueLimit) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），建议缩短以保留情绪和呼吸空间`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
-      if (shot.dialogue?.trim() && !/(?:表演|情绪|强度)/.test(shot.sound || "")) warnings.push(`${label} 缺少明确情绪表演指令`);
-      const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
-      const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
-      const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
-      if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
-      if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
-      for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+      const performance = shot.sound || "";
+      const hasPerformanceDirection = /(?:表演|情绪|语气|口吻)\s*[:：]\s*\S+/.test(performance)
+        && /强度\s*[:：]?\s*[1-5]/.test(performance)
+        && /(?:语速|速度|节奏|音量|轻声|低声|大喊|耳语)/.test(performance);
+      if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
+      if (includeCharacters) {
+        const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
+        const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
+        const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
+        if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
+        if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
+        for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+      }
     }
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
   }
@@ -217,7 +232,7 @@ export default function StoryboardPage() {
       const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
       write(0,"RIFF"); view.setUint32(4,36 + frames * channels * 2,true); write(8,"WAVE"); write(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,channels,true); view.setUint32(24,rate,true); view.setUint32(28,rate * channels * 2,true); view.setUint16(32,channels * 2,true); view.setUint16(34,16,true); write(36,"data"); view.setUint32(40,frames * channels * 2,true);
       let offset = 44; for (let frame = 0; frame < frames; frame++) { const sourceFrame = Math.floor(frame * source.sampleRate / rate); let sample = 0; if (sourceFrame < source.length) for (let channel = 0; channel < source.numberOfChannels; channel++) sample += source.getChannelData(channel)[sourceFrame] / source.numberOfChannels; sample = Math.max(-1,Math.min(1,sample)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
-      const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return btoa(binary);
+      const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return {base64:btoa(binary),audioSeconds:source.duration};
     } finally { await context.close(); }
   }
 
@@ -239,7 +254,9 @@ export default function StoryboardPage() {
     let jobId = "";
     if (!resuming) {
     const targetSeconds = await videoDurationSeconds(shot.video_url!);
-    const paddedAudioBase64 = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
+    const paddedAudio = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
+    const overrun=paddedAudio.audioSeconds-targetSeconds;const allowedOverrun=Math.max(.25,targetSeconds*.05);if(overrun>allowedOverrun)throw new Error(`镜头 ${shot.shot_number} 的配音 ${paddedAudio.audioSeconds.toFixed(1)} 秒，比视频 ${targetSeconds.toFixed(1)} 秒长 ${overrun.toFixed(1)} 秒。为避免口型错位，请按新配音时长重新生成这个视频后再同步口型`);
+    const paddedAudioBase64 = paddedAudio.base64;
     const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, paddedAudioBase64 }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
       jobId = String(created.jobId || "");
@@ -288,7 +305,7 @@ export default function StoryboardPage() {
     try {
       for (let index = 0; index < working.length; index++) {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/5 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
-        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=index>0?working[index-1]:undefined;const context=imageReferenceContext(shot,prior,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;working[index] = shot; }
+        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=working.slice(0,index).toReversed().find((item)=>item.image_url);const context=imageReferenceContext(shot,prior,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
       for (let index = 0; index < working.length; index++) {
