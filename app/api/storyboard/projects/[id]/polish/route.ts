@@ -5,6 +5,7 @@ import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { normalizeSpeakerName, stableSpeakerVoice, type SpeakerVoiceProfile } from "@/app/lib/speakerVoice";
+import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type PolishedShot = { shot_number: number; dialogue: string; sound: string; duration_seconds: number; speaker_name: string; speaker_voice: SpeakerVoiceProfile };
 type Character = { id: string; name: string; voice_id?: string; voice_language?: string };
@@ -51,7 +52,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const namedSpeaker = characters.find((character) => normalizeSpeakerName(character.name) === normalizeSpeakerName(speakerName));
       const speaker = boundSpeaker ?? namedSpeaker;
       const speakerCharacterId = current.speaker_character_id ?? namedSpeaker?.id ?? null;
-      const voiceId = speaker?.voice_id || stableSpeakerVoice(speakerName, profiles.get(normalizeSpeakerName(speakerName)) ?? item.speaker_voice);
+      const voiceId = normalizeVoiceId(speaker?.voice_id, normalizeVoiceId(stableSpeakerVoice(speakerName, profiles.get(normalizeSpeakerName(speakerName)) ?? item.speaker_voice)));
       const voiceChanged = Boolean(item.dialogue.trim()) && (String(current.voice_id ?? "") !== voiceId || (current.speaker_character_id ?? null) !== speakerCharacterId);
       if (voiceChanged) upgradedVoices++;
       const imagePrompt = withContinuityPrompt(String(current.image_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "image");

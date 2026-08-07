@@ -4,6 +4,7 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { stableSpeakerVoice } from "@/app/lib/speakerVoice";
+import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string; speaker_voice: "female" | "male" | "neutral" };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -162,7 +163,7 @@ export async function POST(request: Request) {
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
       speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),
-      voice_id: speaker?.voice_id || stableSpeakerVoice(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice),
+      voice_id: normalizeVoiceId(speaker?.voice_id, normalizeVoiceId(stableSpeakerVoice(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice))),
       voice_language: speaker?.voice_language || "zh",
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
