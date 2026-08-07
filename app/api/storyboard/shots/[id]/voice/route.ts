@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
-const voices = new Set(["orion", "carina", "zagan", "luna", "iris", "altair", "perseus", "eve"]);
+const voices = new Set(["orion", "carina", "zagan", "luna", "iris", "altair", "perseus", "ara", "eve", "leo", "rex", "sal"]);
 const languages = new Set(["zh", "en", "ja", "auto"]);
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,18 +15,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   let eventId = "";
   try {
-    const body = (await request.json()) as { voiceId?: string; language?: string; speed?: number; batch?: boolean };
-    const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : "orion";
+    const body = (await request.json()) as { voiceId?: string; fallbackVoiceId?: string; language?: string; speed?: number; batch?: boolean };
     const language = languages.has(body.language ?? "") ? body.language! : "zh";
-    const speed = Math.min(1.5, Math.max(0.7, Number(body.speed ?? 1)));
-    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds").eq("id", id).eq("user_id", user.id).single();
+    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,character_names,speaker_character_id").eq("id", id).eq("user_id", user.id).single();
     if (shotError || !shot) throw new Error("未找到这个分镜");
     const text = String(shot.dialogue ?? "").trim();
     if (!text) return NextResponse.json({ error: "这个镜头没有对白或旁白" }, { status: 400 });
+    const performanceContext = `${String(shot.action ?? "")} ${(shot.character_names ?? []).join(" ")}`;
+    const likelyFemale = /苏雨晴|女孩|少女|女人|女性|女主|她/.test(performanceContext) && !shot.speaker_character_id;
+    const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : likelyFemale ? "eve" : voices.has(body.fallbackVoiceId ?? "") ? body.fallbackVoiceId! : "rex";
+    const whispering = /微弱|虚弱|低声|耳语|气若游丝/.test(performanceContext);
+    const urgent = /惊恐|恐惧|急促|大喊|冲向|警告/.test(performanceContext) || /！|!/.test(text);
+    const speed = Math.min(1.5, Math.max(0.7, Number(body.speed ?? (whispering ? 0.88 : urgent ? 1.1 : 0.96))));
+    const expressiveText = whispering ? `<whisper>${text}</whisper>` : urgent ? `${text.replace(/[。.]$/u, "")}！` : text;
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/tts", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: voiceId, language, speed, output_format: { codec: "mp3", sample_rate: 24000, bit_rate: 128000 } }), cache: "no-store",
+      body: JSON.stringify({ text: expressiveText, voice_id: voiceId, language, speed, output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 } }), cache: "no-store",
     });
     if (!response.ok) {
       const detail = await response.text();
