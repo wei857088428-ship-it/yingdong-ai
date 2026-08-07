@@ -17,7 +17,7 @@ const shotProperties = {
   emotion: { type: "string", description: "Actor direction: emotion, intensity 1-5, pace, volume and subtext" },
   sound: { type: "string" },
   image_prompt: { type: "string" }, video_prompt: { type: "string" },
-  continuity_state: { type: "string", description: "Exact end-of-shot ledger: location, time, each character position and facing, clothing, injuries, held props, lighting, and final pose. Preserve unchanged facts from the prior shot." },
+  continuity_state: { type: "string", minLength: 20, description: "Exact end-of-shot ledger: location, time, each character position and facing, clothing, injuries, held props, lighting, and final pose. Preserve unchanged facts from the prior shot." },
   character_names: { type: "array", items: { type: "string" }, maxItems: 6 },
   speaker_name: { type: "string" },
   speaker_voice: { type: "string", enum: ["female", "male", "neutral"] },
