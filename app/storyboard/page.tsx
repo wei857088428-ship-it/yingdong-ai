@@ -142,9 +142,22 @@ export default function StoryboardPage() {
     } finally { await context.close(); }
   }
 
+  async function videoDurationSeconds(url: string) {
+    return await new Promise<number>((resolve, reject) => {
+      const video = document.createElement("video");
+      const timeout = window.setTimeout(() => reject(new Error("读取视频时长超时")), 15000);
+      const cleanup = () => { window.clearTimeout(timeout); video.removeAttribute("src"); video.load(); };
+      video.preload = "metadata";
+      video.onloadedmetadata = () => { const duration = video.duration; cleanup(); Number.isFinite(duration) && duration > 0 ? resolve(duration) : reject(new Error("视频时长无效")); };
+      video.onerror = () => { cleanup(); reject(new Error("读取视频时长失败")); };
+      video.src = url;
+    });
+  }
+
   async function lipSyncOne(shot: Shot) {
     const mode = lipSyncMode(shot);
-    const paddedAudioBase64 = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, shot.duration_seconds);
+    const targetSeconds = await videoDurationSeconds(shot.video_url!);
+    const paddedAudioBase64 = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
     const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, paddedAudioBase64 }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
     for (let attempt = 0; attempt < 180; attempt++) {
