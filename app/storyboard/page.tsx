@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
-import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
+import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -351,7 +351,7 @@ export default function StoryboardPage() {
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
-            <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}><option value="eve">Eve · 活力情绪女声</option><option value="ara">Ara · 温暖自然女声</option><option value="rex">Rex · 清晰自信男声</option><option value="leo">Leo · 强势沉稳男声</option><option value="sal">Sal · 平衡旁白声</option></select></div>
+            <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>{characterVoiceOptions.map((voice)=><option key={voice.id} value={voice.id}>{voice.id[0].toUpperCase()}{voice.id.slice(1)} · {voice.label}</option>)}</select></div>
             <div><label>配音语言</label><select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}><option value="zh">普通话</option><option value="en">英语</option><option value="ja">日语</option><option value="auto">自动识别（可尝试粤语）</option></select></div>
             <div><label>视频清晰度</label><select value={videoResolution} onChange={(e)=>setVideoResolution(e.target.value as "480p"|"720p")}><option value="720p">720p 高清 · 112积分/镜</option><option value="480p">480p 标准 · 80积分/镜</option></select></div>
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>

@@ -5,13 +5,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
-import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
+import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
 
 type Slot = "front" | "left" | "right" | "full";
 type Character = { id: string; name: string; description: string; version: number; images: Record<Slot, string | undefined>; voice_id: string; voice_language: string };
 const slots: Array<{ key: Slot; label: string }> = [{ key: "front", label: "正面" }, { key: "left", label: "左45°" }, { key: "right", label: "右45°" }, { key: "full", label: "全身" }];
-const voices = [{ id: "rex", label: "Rex · 戏剧感男声（推荐）" }, { id: "eve", label: "Eve · 情绪女声（推荐）" }, { id: "leo", label: "Leo · 沉稳男声" }, { id: "ara", label: "Ara · 自然女声" }, { id: "orion", label: "Orion · 电影男声" }, { id: "perseus", label: "Perseus · 自信男声" }, { id: "zagan", label: "Zagan · 戏剧角色" }, { id: "carina", label: "Carina · 温柔女声" }, { id: "luna", label: "Luna · 亲和女声" }, { id: "iris", label: "Iris · 活泼女声" }];
-voices.splice(0, voices.length, { id: "eve", label: "Eve · 活力情绪女声（推荐）" }, { id: "ara", label: "Ara · 温暖自然女声" }, { id: "rex", label: "Rex · 清晰自信男声" }, { id: "leo", label: "Leo · 强势沉稳男声" }, { id: "sal", label: "Sal · 平衡旁白声" });
+const voices = characterVoiceOptions.map((voice)=>({id:voice.id,label:`${voice.id[0].toUpperCase()}${voice.id.slice(1)} · ${voice.label}`}));
 
 export default function CharactersPage() {
   const router = useRouter();
@@ -26,10 +25,10 @@ export default function CharactersPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const requestedName = new URLSearchParams(window.location.search).get("name")?.trim();
-    if (requestedName) { setName(requestedName); setStatus(`请上传 ${requestedName} 的正面参考图并完善固定外貌`); }
     supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) { router.replace("/login"); return; }
+      const requestedName = new URLSearchParams(window.location.search).get("name")?.trim();
+      if (requestedName) { setName(requestedName); setStatus(`请上传 ${requestedName} 的正面参考图并完善固定外貌`); }
       setUserId(data.user.id);
       const { data: rows } = await supabase.from("characters").select("id,name,description,version,images,voice_id,voice_language").order("updated_at", { ascending: false });
       setCharacters(((rows ?? []) as Character[]).map((character) => ({ ...character, voice_id: normalizeVoiceId(character.voice_id) })));
