@@ -163,13 +163,13 @@ export default function StoryboardPage() {
     if (!pending.length) return setStatus("没有等待口型同步的镜头，请先生成视频和配音");
     const estimate = pending.reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
     if (!window.confirm(`将同步 ${pending.length} 个镜头的声音和口型，预计消耗 HeyGen 约 $${estimate.toFixed(2)} 美元。特写/近景使用高精度，其余使用快速模式。确定继续吗？`)) return;
-    setBatching(true); let failures = 0;
+    setBatching(true); let failures = 0; let lastFailure = "";
     try {
       for (let index = 0; index < pending.length; index++) {
         const shot = pending[index]; setStatus(`HeyGen 口型同步 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`);
-        try { await lipSyncOne(shot); } catch (error) { failures++; setStatus(error instanceof Error ? error.message : "口型同步失败"); }
+        try { await lipSyncOne(shot); } catch (error) { failures++; lastFailure = error instanceof Error ? error.message : "口型同步失败"; setStatus(lastFailure); }
       }
-      setStatus(failures ? `口型同步完成，${failures} 个镜头失败` : "声音与口型同步完成，可直接播放检查效果");
+      setStatus(failures ? `口型同步失败：${lastFailure || `${failures} 个镜头失败`}` : "声音与口型同步完成，可直接播放检查效果");
     } finally { setBatching(false); }
   }
 
