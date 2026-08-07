@@ -73,7 +73,11 @@ export default function EpisodePage() {
         segmentNames.push(segmentName);
         for(const temporary of [sourceName,...(separateVoice?[audioName]:[]),...(sourceAmbience?[ambientName]:[]),...subtitleNames])await ffmpeg.deleteFile(temporary).catch(()=>undefined);
       }
-      await ffmpeg.writeFile("segments.txt",segmentNames.map((name)=>`file '${name}'`).join("\n"));setExportStatus("正在合并整集并封装 MP4…");setExportProgress(95);await ffmpeg.exec(["-f","concat","-safe","0","-i","segments.txt","-c","copy","-movflags","+faststart","episode.mp4"]);const output=await ffmpeg.readFile("episode.mp4");if(typeof output==="string")throw new Error("视频编码结果异常");const url=URL.createObjectURL(new Blob([output as Uint8Array<ArrayBuffer>],{type:"video/mp4"}));const link=document.createElement("a");link.href=url;link.download=`${project.title}-影动AI.mp4`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),30000);setExportProgress(100);setExportStatus("整集 MP4 已导出到下载文件夹");
+      await ffmpeg.writeFile("segments.txt",segmentNames.map((name)=>`file '${name}'`).join("\n"));setExportStatus("正在合并整集并封装 MP4…");setExportProgress(95);
+      const concatExit=await ffmpeg.exec(["-f","concat","-safe","0","-i","segments.txt","-c","copy","-movflags","+faststart","episode.mp4"]);if(concatExit!==0)throw new Error("整集镜头合并失败");
+      const output=await ffmpeg.readFile("episode.mp4");if(typeof output==="string"||output.byteLength<1024)throw new Error("视频编码结果为空或异常");
+      for(const name of [...segmentNames,"segments.txt","episode.mp4"])await ffmpeg.deleteFile(name).catch(()=>undefined);
+      const url=URL.createObjectURL(new Blob([output as Uint8Array<ArrayBuffer>],{type:"video/mp4"}));const link=document.createElement("a");link.href=url;link.download=`${project.title}-影动AI.mp4`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),30000);setExportProgress(100);setExportStatus("整集 MP4 已导出到下载文件夹");
     }catch(reason){setExportStatus(reason instanceof Error?`导出失败：${reason.message}`:"整集导出失败，请重试");}finally{setExporting(false);}}
 
   if(error)return <main className="episode-page"><div className="episode-empty">{error}<Link href={`/storyboard?project=${params.id}`}>返回分镜</Link></div></main>;
