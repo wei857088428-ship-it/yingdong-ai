@@ -52,11 +52,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
     const payload = await response.json() as { audio?: string; duration?: number; content_type?: string; audio_timestamps?: AudioTimestamps };
     if (!payload.audio) throw new Error("xAI 配音返回内容为空");
-    const path = `${user.id}/${shot.project_id}/${shot.id}.mp3`;
+    const version = Date.now();
+    const path = `${user.id}/${shot.project_id}/${shot.id}.${version}.mp3`;
     const audio = Uint8Array.from(Buffer.from(payload.audio, "base64"));
-    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: true });
+    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: false });
     if (uploadError) throw uploadError;
-    const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.timings.json`;
+    const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.${version}.timings.json`;
     const timings = new TextEncoder().encode(JSON.stringify({ version: 1, cues: captionCues(text, payload.audio_timestamps) }));
     await supabase.storage.from("storyboard-audio").upload(timingsPath, timings, { contentType: "audio/mpeg", upsert: true });
     const audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
@@ -66,7 +67,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const audioDuration = Math.max(0, Number(payload.duration ?? 0));
     const matchedDuration = Math.min(15, Math.max(2, Math.ceil(audioDuration + 0.35)));
     const endMs = startMs + Math.round(audioDuration * 1000);
-    const updates: Record<string, unknown> = { audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs };
+    const updates: Record<string, unknown> = { audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs, media_status: shot.video_url ? "completed" : "pending", error_message: null };
     if (shot.media_status === "lipsync_ready") {
       const sourceVideo = await originalVideoUrl(supabase, user.id, shot.project_id, shot.id);
       Object.assign(updates, { video_url: sourceVideo, media_status: sourceVideo ? "completed" : "pending", error_message: null });
