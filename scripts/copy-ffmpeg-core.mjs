@@ -8,8 +8,8 @@ const target = join(root, "public", "render-engine");
 
 await mkdir(target, { recursive: true });
 await Promise.all([
-  copyFile(join(source, "ffmpeg-core.js"), join(target, "core.js")),
-  copyFile(join(source, "ffmpeg-core.wasm"), join(target, "core.wasm")),
+  copyFile(join(source, "ffmpeg-core.js"), join(target, "engine")),
+  copyFile(join(source, "ffmpeg-core.wasm"), join(target, "data")),
 ]);
 
 console.log("Video render core copied to public/render-engine");
