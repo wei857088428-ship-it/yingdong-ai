@@ -46,11 +46,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       audio: { type: "url", url: shot.audio_url },
       mode,
       title: `影动AI · 镜头 ${shot.shot_number}`,
-      enable_dynamic_duration: true,
-      enable_caption: false,
-      disable_music_track: true,
-      keep_the_same_format: true,
-      fps_mode: "passthrough",
+      enableDynamicDuration: true,
+      enableCaption: false,
+      disableMusicTrack: true,
+      keepTheSameFormat: true,
+      fpsMode: "passthrough",
     }),
   });
   const payload = await response.json().catch(() => ({}));
