@@ -83,11 +83,14 @@ export async function POST(request: Request) {
     const parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
     const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => {
       const characterNames = cleanCharacterNames(Array.isArray(shot.character_names) ? shot.character_names : []);
+      const dialogue = String(shot.dialogue ?? "");
+      const spokenUnits = [...dialogue.replace(/[\s，。！？、…,.!?]/g, "")].length;
+      const dialogueMatchedDuration = spokenUnits ? Math.ceil(spokenUnits / 4.2 + 1) : Number(shot.duration_seconds ?? 5);
       return {
       shot_number: index + 1,
-      duration_seconds: Math.min(15, Math.max(2, Number(shot.duration_seconds ?? 5))),
+      duration_seconds: Math.min(15, Math.max(2, dialogueMatchedDuration)),
       shot_type: String(shot.shot_type ?? ""), camera: String(shot.camera ?? ""), scene: String(shot.scene ?? ""),
-      action: String(shot.action ?? ""), dialogue: String(shot.dialogue ?? ""), sound: String(shot.sound ?? ""),
+      action: String(shot.action ?? ""), dialogue, sound: String(shot.sound ?? ""),
       image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),

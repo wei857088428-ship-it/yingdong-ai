@@ -29,9 +29,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const grieving = /哭|哽咽|悲伤|失去|绝望/.test(performanceContext);
     const chineseUnits = [...text.replace(/[\s，。！？、…,.!?]/g, "")].length;
     const targetSeconds = Math.max(2, Number(shot.duration_seconds ?? 5) - 0.35);
-    const durationMatchedSpeed = chineseUnits ? chineseUnits / (4.2 * targetSeconds) : 1;
+    const durationMatchedSpeed = chineseUnits ? chineseUnits / (5 * targetSeconds) : 1;
     const emotionFactor = whispering || grieving ? 0.92 : urgent ? 1.04 : 1;
-    const speed = Math.min(1.3, Math.max(0.72, Number(body.speed ?? durationMatchedSpeed * emotionFactor)));
+    const speed = Math.min(1.3, Math.max(0.6, Number(body.speed ?? durationMatchedSpeed * emotionFactor)));
     const punctuatedText = urgent ? text.replace(/[。.]$/u, "！") : grieving ? text.replace(/，/g, "……") : text;
     const expressiveText = whispering ? `<whisper>${punctuatedText}</whisper>` : punctuatedText;
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
