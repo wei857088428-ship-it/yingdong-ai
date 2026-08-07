@@ -12,7 +12,7 @@ import { storyTemplates, type StoryTemplate } from "@/app/lib/storyTemplates";
 import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storyboardCharacterLimit";
 import { lipSyncPollDecision } from "@/app/lib/lipsyncPolling";
 import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
-import { parentClosingImageShot } from "@/app/lib/seriesImageReference";
+import { parentClosingImageShot, seriesOpeningImageShot } from "@/app/lib/seriesImageReference";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -135,7 +135,7 @@ export default function StoryboardPage() {
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
     const workingImages=shots.map((shot)=>({...shot}));
-    const seriesReference=parentClosingImageShot(projects,currentProjectId);let styleImage = shots.filter((shot) => shot.image_url).toSorted((a,b) => a.shot_number-b.shot_number)[0]?.image_url||seriesReference?.image_url;
+    const seriesReference=parentClosingImageShot(projects,currentProjectId);const seriesStyle=seriesOpeningImageShot(projects,currentProjectId);let styleImage = shots.filter((shot) => shot.image_url).toSorted((a,b) => a.shot_number-b.shot_number)[0]?.image_url||seriesStyle?.image_url||seriesReference?.image_url;
     for (let index = 0; index < pending.length; index++) { const shot = pending[index];const shotIndex=workingImages.findIndex((item)=>item.id===shot.id);const previousShot=workingImages.slice(0,Math.max(0,shotIndex)).toReversed().find((item)=>item.image_url)||(shotIndex===0?seriesReference:undefined); setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); const updated=await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" });if(shotIndex>=0)workingImages[shotIndex]=updated;styleImage ||= data.imageUrl; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
     setBatching(false); setStatus("批量图片生成完成");
   }
@@ -341,7 +341,7 @@ export default function StoryboardPage() {
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
     const qualityNote = quality.warnings.length ? `\n\n制作检查 ${quality.score} 分，发现 ${quality.warnings.length} 项建议：\n${quality.warnings.slice(0, 4).join("\n")}` : "\n\n制作检查 100 分，未发现明显问题。";
     if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段 ${videoResolution} 视频、${voiceCount} 段配音与字幕、${lipSyncCount} 段口型同步；预计最多消耗 ${estimatedCredits} 积分、xAI 视频约 $${estimatedXaiVideo.toFixed(2)} 美元、HeyGen 约 $${estimatedHeyGen.toFixed(2)} 美元，已成功内容不会重复生成。${qualityNote}\n\n确定继续吗？`)) return;
-    setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;const seriesReference=parentClosingImageShot(projects,currentProjectId);let styleImage=working.find((shot)=>shot.image_url)?.image_url||seriesReference?.image_url;
+    setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;const seriesReference=parentClosingImageShot(projects,currentProjectId);const seriesStyle=seriesOpeningImageShot(projects,currentProjectId);let styleImage=working.find((shot)=>shot.image_url)?.image_url||seriesStyle?.image_url||seriesReference?.image_url;
     try {
       for (let index = 0; index < working.length; index++) {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/5 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
