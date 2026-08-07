@@ -170,6 +170,7 @@ export default function StoryboardPage() {
   };
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
   const requiresLipSync = (shot: Shot) => Boolean(shot.dialogue?.trim() && shot.speaker_character_id);
+  const needsProductionRetry = (shot: Shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message) || !shot.image_url || !shot.video_url || Boolean(shot.dialogue?.trim()&&!shot.audio_url) || (requiresLipSync(shot)&&!isLipSynced(shot));
   function qualityReport(items: Shot[]) {
     const critical: string[] = []; const warnings: string[] = [];
     for (const shot of items) {
@@ -317,12 +318,13 @@ export default function StoryboardPage() {
         try { const completedShot=await lipSyncOne(shot);const workingIndex=working.findIndex((item)=>item.id===shot.id);if(workingIndex>=0)working[workingIndex]=completedShot; }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "口型同步失败" }); }
       }
-      setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、视频、字幕和口型同步全部完成，可直接预览或导出");
+      const audited=working.filter((shot)=>!retryShotIds||retryShotIds.has(shot.id));const missingImages=audited.filter((shot)=>!shot.image_url).length;const missingVideos=audited.filter((shot)=>!shot.video_url).length;const missingVoices=audited.filter((shot)=>shot.dialogue?.trim()&&!shot.audio_url).length;const missingLipSync=audited.filter((shot)=>requiresLipSync(shot)&&!isLipSynced(shot)).length;const unfinishedIds=new Set(audited.filter((shot)=>!shot.image_url||!shot.video_url||(shot.dialogue?.trim()&&!shot.audio_url)||(requiresLipSync(shot)&&!isLipSynced(shot))).map((shot)=>shot.id));
+      setStatus(unfinishedIds.size ? `整集制作尚有 ${unfinishedIds.size} 个镜头未完成：缺 ${missingImages} 张图片、${missingVideos} 段视频、${missingVoices} 段配音、${missingLipSync} 段角色口型；可点击重试失败任务${failures?`（本次捕获 ${failures} 个错误）`:""}` : "整集图片、情绪配音、视频、字幕和角色口型同步均已核验完成，可直接预览或导出");
     } finally { setBatching(false); }
   }
 
   function retryFailedTasks() {
-    const failedIds = new Set(shots.filter((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)).map((shot) => shot.id));
+    const failedIds = new Set(shots.filter(needsProductionRetry).map((shot) => shot.id));
     if (!failedIds.size) return setStatus("当前没有失败任务");
     void generateFullEpisode(failedIds);
   }
@@ -355,7 +357,7 @@ export default function StoryboardPage() {
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>
             <button disabled={batching} onClick={runQualityCheck}>制作前质量检查</button>
             <button disabled={batching || !currentProjectId} onClick={() => void polishDialogue()}>AI 修复对白、情绪与连续性</button>
-            {shots.some((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>恢复或重试任务 · {shots.filter((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)).length} 镜</button>}
+            {shots.some(needsProductionRetry) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>恢复或重试未完成任务 · {shots.filter(needsProductionRetry).length} 镜</button>}
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
             <button disabled={batching} onClick={batchVideos}>批量图片转视频 · {shots.filter((shot) => shot.image_url && !shot.video_url).length} 镜</button>
             <button disabled={batching} onClick={batchVoices}>批量生成配音 · {shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length} 镜</button>
