@@ -10,7 +10,9 @@ const HEYGEN_URL = "https://api.heygen.com/v3/lipsyncs";
 function messageOf(payload: unknown, fallback: string) {
   if (!payload || typeof payload !== "object") return fallback;
   const value = payload as Record<string, unknown>;
-  return String(value.message ?? value.error ?? value.detail ?? fallback).slice(0, 500);
+  if (value.failure && typeof value.failure === "object") return messageOf(value.failure, fallback);
+  if (value.error && typeof value.error === "object") return messageOf(value.error, fallback);
+  return String(value.failure_message ?? value.message ?? value.error ?? value.detail ?? fallback).slice(0, 500);
 }
 
 function dataOf(payload: unknown) {
@@ -23,6 +25,11 @@ async function ownedShot(id: string, userId: string) {
   const supabase = await createServerSupabaseClient();
   const { data } = await supabase.from("storyboard_shots").select("*").eq("id", id).eq("user_id", userId).maybeSingle();
   return { supabase, shot: data };
+}
+
+async function failShot(id: string, userId: string, error: string) {
+  const supabase = await createServerSupabaseClient();
+  await supabase.from("storyboard_shots").update({ media_status: "failed", error_message: error.slice(0, 500) }).eq("id", id).eq("user_id", userId);
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -58,21 +65,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   await supabase.from("storyboard_shots").update({ media_status: "lipsync_generating", error_message: null }).eq("id", id).eq("user_id", user.id);
 
-  const response = await fetch(HEYGEN_URL, {
-    method: "POST",
-    headers: { "X-Api-Key": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      video: { type: "url", url: shot.video_url },
-      audio: { type: "url", url: audioUrl },
-      mode,
-      title: `影动AI · 镜头 ${shot.shot_number}`,
-      enable_dynamic_duration: true,
-      enable_caption: false,
-      disable_music_track: true,
-      keep_the_same_format: true,
-      fps_mode: "passthrough",
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(HEYGEN_URL, {
+      method: "POST",
+      headers: { "X-Api-Key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video: { type: "url", url: shot.video_url },
+        audio: { type: "url", url: audioUrl },
+        mode,
+        title: `影动AI · 镜头 ${shot.shot_number}`,
+        enable_dynamic_duration: true,
+        enable_caption: false,
+        disable_music_track: true,
+        keep_the_same_format: true,
+        fps_mode: "passthrough",
+      }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? `连接 HeyGen 失败：${error.message}` : "连接 HeyGen 失败";
+    await failShot(id, user.id, message);
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = messageOf(payload, "HeyGen 口型同步创建失败");
@@ -81,7 +95,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   const data = dataOf(payload);
   const jobId = String(data.id ?? data.lipsync_id ?? data.job_id ?? "");
-  if (!jobId) return NextResponse.json({ error: "HeyGen 未返回任务编号" }, { status: 502 });
+  if (!jobId) {
+    const error = "HeyGen 未返回任务编号";
+    await failShot(id, user.id, error);
+    return NextResponse.json({ error }, { status: 502 });
+  }
   try { await saveLipSyncJob(supabase, user.id, shot.project_id, shot.id, jobId, mode); }
   catch (error) {
     console.error("Persist lip-sync recovery id failed; current browser can still finish the job:", error);
