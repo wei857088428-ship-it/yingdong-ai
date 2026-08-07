@@ -17,7 +17,7 @@ function applyPromptTemplate(prompt: string, label: string, instruction: string)
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  const { id } = await params; const body = (await request.json()) as { imageUrl?: string; videoUrl?: string; status?: string; error?: string; characterIds?: string[] | null; shotTemplate?: keyof typeof templates };
+  const { id } = await params; const body = (await request.json()) as { imageUrl?: string; videoUrl?: string; status?: string; error?: string; characterIds?: string[] | null; speakerCharacterId?: string | null; shotTemplate?: keyof typeof templates };
   const updates: Record<string, string | string[] | null> = {};
   if (body.imageUrl) updates.image_url = body.imageUrl;
   if (body.videoUrl) updates.video_url = body.videoUrl;
@@ -42,6 +42,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
       updates.character_ids = ids;
     }
+  }
+  if (body.speakerCharacterId !== undefined) {
+    if (body.speakerCharacterId) {
+      const { data: speaker } = await supabase.from("characters").select("id,voice_id,voice_language").eq("id", body.speakerCharacterId).eq("user_id", user.id).maybeSingle();
+      if (!speaker) return NextResponse.json({ error: "说话角色无效" }, { status: 400 });
+      updates.speaker_character_id = speaker.id; updates.voice_id = speaker.voice_id || "orion"; updates.voice_language = speaker.voice_language || "zh";
+    } else updates.speaker_character_id = null;
+    updates.audio_url = null; updates.subtitle_start_ms = null; updates.subtitle_end_ms = null; updates.error_message = null;
+    const { data: current } = await supabase.from("storyboard_shots").select("media_status").eq("id", id).eq("user_id", user.id).maybeSingle();
+    if (current?.media_status === "lipsync_ready") { updates.video_url = null; updates.media_status = "pending"; }
   }
   const { data, error } = await supabase.from("storyboard_shots").update(updates).eq("id", id).eq("user_id", user.id).select("*").single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
