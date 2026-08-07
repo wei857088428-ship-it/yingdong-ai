@@ -138,22 +138,32 @@ export default function StoryboardPage() {
     setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;
     try {
       for (let index = 0; index < working.length; index++) {
-        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/3 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/4 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
         try { await updateShot(shot.id, { status: "image_generating", error: "" }); const previousImage = index > 0 ? working[index - 1]?.image_url : undefined; const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterIds: effectiveCharacterIds(shot), referenceImage: previousImage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
       for (let index = 0; index < working.length; index++) {
-        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || !shot.image_url || shot.video_url) continue; setStatus(`整集制作 2/3 · 图片转视频 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
-        try { await updateShot(shot.id, { status: "video_generating", error: "" }); const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: shot.video_prompt, image: shot.image_url, duration: Math.min(15, shot.duration_seconds), aspectRatio: "9:16", resolution: "480p", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); let videoUrl = ""; for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 5000)); const check = await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`, { cache: "no-store" }); const detail = await check.json(); if (!check.ok) throw new Error(detail.error); if (detail.status === "done") { videoUrl = detail.videoUrl; break; } if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，积分已退还"); } if (!videoUrl) throw new Error("视频仍在处理中，请稍后重试"); shot = await updateShot(shot.id, { videoUrl, status: "completed", error: "" }); working[index] = shot; }
+        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || !shot.image_url || shot.video_url) continue;
+        try {
+          if (shot.dialogue?.trim() && !shot.audio_url) {
+            setStatus(`整集制作 2/4 · 先生成配音并校准时长 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+            const speaker = characters.find((character) => character.id === shot.speaker_character_id);
+            const voiceResponse = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
+            const voiceData = await voiceResponse.json(); if (!voiceResponse.ok) throw new Error(voiceData.error);
+            shot = voiceData.shot as Shot; working[index] = shot; setShots((current) => current.map((item) => item.id === shot.id ? shot : item));
+          }
+          setStatus(`整集制作 3/4 · 按配音时长生成视频 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+          await updateShot(shot.id, { status: "video_generating", error: "" }); const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: shot.video_prompt, image: shot.image_url, duration: Math.min(15, shot.duration_seconds), aspectRatio: "9:16", resolution: "480p", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); let videoUrl = ""; for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 5000)); const check = await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`, { cache: "no-store" }); const detail = await check.json(); if (!check.ok) throw new Error(detail.error); if (detail.status === "done") { videoUrl = detail.videoUrl; break; } if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，积分已退还"); } if (!videoUrl) throw new Error("视频仍在处理中，请稍后重试"); shot = await updateShot(shot.id, { videoUrl, status: "completed", error: "" }); working[index] = shot;
+        }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "视频生成失败" }); }
       }
       const voiceShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.dialogue?.trim() && !shot.audio_url);
       for (let index = 0; index < voiceShots.length; index++) {
-        const shot = voiceShots[index]; setStatus(`整集制作 3/3 · 配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
+        const shot = voiceShots[index]; setStatus(`整集制作 4/4 · 补充配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
         try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "配音生成失败" }); }
       }
-      setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、视频、角色配音和字幕时间轴全部完成");
+      setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、匹配时长的视频和字幕时间轴全部完成");
     } finally { setBatching(false); }
   }
 
