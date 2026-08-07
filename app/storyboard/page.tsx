@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
-import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
+import { redundantDramaticFunctionIndex } from "@/app/lib/dramaticProgression";
 import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 import { storyTemplates, type StoryTemplate } from "@/app/lib/storyTemplates";
 import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storyboardCharacterLimit";
@@ -195,7 +195,7 @@ export default function StoryboardPage() {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
-    const critical: string[] = []; const warnings: string[] = []; const seenDramaticFunctions = new Map<string,number>();
+    const critical: string[] = []; const warnings: string[] = []; const dramaticFunctions: string[] = []; const dramaticFunctionShots: number[] = [];
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
       if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
@@ -207,8 +207,8 @@ export default function StoryboardPage() {
           return dramaticFunction.length >= 15 && causalLink.length >= 10 && continuityState.length >= 20;
         });
         if (!contractComplete) critical.push(`${label} 缺少剧情推进、因果链或镜头结束状态，需先执行 AI 修复对白与连续性`);
-        const dramaticFunction=shot.video_prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim()??"";const normalizedFunction=normalizeDramaticFunction(dramaticFunction);
-        if(normalizedFunction){const duplicate=seenDramaticFunctions.get(normalizedFunction);if(duplicate)critical.push(`${label} 与镜头 ${duplicate} 的剧情功能完全重复，需先执行 AI 修复`);else seenDramaticFunctions.set(normalizedFunction,shot.shot_number);}
+        const dramaticFunction=shot.video_prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim()??"";
+        if(dramaticFunction){const duplicateIndex=redundantDramaticFunctionIndex([...dramaticFunctions,dramaticFunction],dramaticFunctions.length);if(duplicateIndex>=0)critical.push(`${label} 与镜头 ${dramaticFunctionShots[duplicateIndex]} 的剧情推进高度重复，需先执行 AI 修复`);dramaticFunctions.push(dramaticFunction);dramaticFunctionShots.push(shot.shot_number);}
         if (shot.dialogue?.trim() && shot.speaker_character_id && !/\[口型同步准备\]/.test(shot.video_prompt)) critical.push(`${label} 缺少说话人脸部与闭嘴约束，需先执行 AI 修复对白与连续性`);
       }
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
