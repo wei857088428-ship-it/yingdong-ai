@@ -6,6 +6,7 @@ import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { stableSpeakerVoice } from "@/app/lib/speakerVoice";
 import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 import { hasDistinctDramaticFunctions } from "@/app/lib/dramaticProgression";
+import { MAX_IDENTITY_REFERENCES } from "@/app/lib/storyboardCharacterLimit";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; dramatic_function: string; causal_link: string; continuity_state: string; character_names: string[]; speaker_name: string; speaker_voice: "female" | "male" | "neutral" };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -21,7 +22,7 @@ const shotProperties = {
   dramatic_function: { type: "string", minLength: 15, description: "Story progression contract: the character's current goal; this shot's obstacle or decision; the concrete irreversible change by the end; and the consequence the next shot must address. Must be distinct from adjacent shots." },
   causal_link: { type: "string", minLength: 10, description: "Visible cause-and-effect bridge: what happened in the previous shot and why it directly triggers this shot's action; for shot 1, state the opening trigger and immediate objective." },
   continuity_state: { type: "string", minLength: 20, description: "Exact end-of-shot ledger: location, time, each character position and facing, clothing, injuries, held props, lighting, and final pose. Preserve unchanged facts from the prior shot." },
-  character_names: { type: "array", items: { type: "string" }, maxItems: 6 },
+  character_names: { type: "array", items: { type: "string" }, maxItems: MAX_IDENTITY_REFERENCES, description: "Characters visibly present in this shot. Keep at most 3 so every identity can receive a reference image; split larger groups into separate reaction shots." },
   speaker_name: { type: "string" },
   speaker_voice: { type: "string", enum: ["female", "male", "neutral"] },
 };

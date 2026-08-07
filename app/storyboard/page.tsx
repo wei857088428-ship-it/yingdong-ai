@@ -9,6 +9,7 @@ import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog"
 import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
 import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 import { storyTemplates, type StoryTemplate } from "@/app/lib/storyTemplates";
+import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storyboardCharacterLimit";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -217,6 +218,8 @@ export default function StoryboardPage() {
       if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
       if (includeCharacters) {
         const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
+        const visibleCharacterCount = uniqueCharacterCount(expectedNames);
+        if (visibleCharacterCount > MAX_IDENTITY_REFERENCES || boundIds.size > MAX_IDENTITY_REFERENCES) critical.push(`${label} 有 ${Math.max(visibleCharacterCount,boundIds.size)} 名可见角色，超过图片接口 ${MAX_IDENTITY_REFERENCES} 张身份参考图上限；请拆成主画面和反应镜头，确保每张脸都稳定`);
         const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
         const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
         if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
