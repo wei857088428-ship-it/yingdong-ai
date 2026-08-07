@@ -1,10 +1,11 @@
-import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 
 const BUCKET = "generated-images";
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 let bucketReady: Promise<void> | null = null;
 
 async function ensureBucket() {
+  const supabaseAdmin = getSupabaseAdmin();
   if (!bucketReady) bucketReady = (async () => {
     const { data } = await supabaseAdmin.storage.getBucket(BUCKET);
     if (data) return;
@@ -19,6 +20,7 @@ async function ensureBucket() {
 }
 
 export async function archiveGeneratedImage(sourceUrl: string, userId: string) {
+  const supabaseAdmin = getSupabaseAdmin();
   const url = new URL(sourceUrl);
   if (url.protocol !== "https:") throw new Error("生成图片地址必须使用 HTTPS");
   await ensureBucket();
