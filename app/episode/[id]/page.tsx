@@ -29,8 +29,13 @@ export default function EpisodePage() {
 
   useEffect(() => { supabase.auth.getUser().then(async ({data}) => { if(!data.user){router.replace("/login");return;} const response=await fetch(`/api/storyboard/projects/${params.id}`,{cache:"no-store"}); const body=await response.json(); if(!response.ok){setError(body.error);return;} setProject(body.project); }); },[params.id,router]);
   useEffect(() => { const probes=shots.filter((item)=>item.video_url&&!mediaDurations[item.id]).map((item)=>{const video=document.createElement("video");video.preload="metadata";video.onloadedmetadata=()=>{if(Number.isFinite(video.duration)&&video.duration>0)setMediaDurations((current)=>({...current,[item.id]:video.duration}));};video.src=item.video_url!;return video;});return()=>probes.forEach((video)=>{video.removeAttribute("src");video.load();});},[shots,mediaDurations]);
-  useEffect(() => { if(!playing || !shot) return; videoRef.current?.play().catch(()=>undefined); audioRef.current?.play().catch(()=>undefined); const duration=mediaDurations[shot.id]??shot.duration_seconds; const started=Date.now(); const timer=window.setInterval(()=>{ const seconds=(Date.now()-started)/1000; setElapsed(Math.min(seconds,duration)); if(seconds>=duration){ window.clearInterval(timer); if(index<shots.length-1){setElapsed(0);setIndex((value)=>value+1);} else setPlaying(false); } },100); return()=>window.clearInterval(timer); },[playing,index,shot,shots.length,mediaDurations]);
-  useEffect(() => { if(!playing)return; videoRef.current?.play().catch(()=>undefined); audioRef.current?.play().catch(()=>undefined); },[index,playing]);
+  useEffect(() => {
+    if(!playing || !shot) return;
+    const video=videoRef.current;const audio=audioRef.current;const duration=mediaDurations[shot.id]??shot.duration_seconds;const started=performance.now();let frame=0;let finished=false;
+    video?.play().catch(()=>undefined);audio?.play().catch(()=>undefined);
+    const tick=()=>{if(finished)return;const fallback=(performance.now()-started)/1000;const clock=audio&&!audio.paused?audio.currentTime:video&&!video.paused?video.currentTime:fallback;if(audio&&video&&Math.abs(video.currentTime-audio.currentTime)>.08)video.currentTime=Math.min(audio.currentTime,Math.max(0,video.duration||duration));setElapsed(Math.min(clock,duration));if(clock>=duration-.03){finished=true;if(index<shots.length-1){setElapsed(0);setIndex((value)=>value+1);}else setPlaying(false);return;}frame=requestAnimationFrame(tick);};
+    frame=requestAnimationFrame(tick);return()=>{finished=true;cancelAnimationFrame(frame);};
+  },[playing,index,shot,shots.length,mediaDurations]);
   useEffect(() => { if(videoRef.current) videoRef.current.volume=shot&&hasEmbeddedVoice(shot)?1:shot?.audio_url?0.2:1; },[shot]);
 
   function toggle(){ if(!shot)return; if(playing){videoRef.current?.pause();audioRef.current?.pause();setPlaying(false);} else setPlaying(true); }
