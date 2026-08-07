@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
+import { stableSpeakerVoice } from "@/app/lib/speakerVoice";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string; speaker_voice: "female" | "male" | "neutral" };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -41,17 +42,6 @@ function matchCharacterId(name: string, characters: Character[]) {
 function matchCharacter(name: string, characters: Character[]) {
   const requested = normalizeName(name);
   return characters.find((character) => normalizeName(character.name) === requested);
-}
-
-function stableVoiceForSpeaker(name: string, profile?: "female" | "male" | "neutral") {
-  const normalized = normalizeName(name);
-  if (!normalized) return "orion";
-  let hash = 0;
-  for (const char of normalized) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  const inferred = /苏雨晴|雨晴|女孩|少女|女人|女性|女主|小美|雪|月|瑶|娜|婷|兰|梅|芳/.test(name) ? "female" : "male";
-  const resolved = profile && profile !== "neutral" ? profile : profile === "neutral" ? "neutral" : inferred;
-  const choices = resolved === "female" ? ["eve", "carina", "luna", "iris"] : resolved === "male" ? ["rex", "orion", "perseus", "zagan"] : ["orion", "lux", "altair", "kepler"];
-  return choices[hash % choices.length];
 }
 
 function storyboardSchema(shotCount: number) {
@@ -152,7 +142,7 @@ export async function POST(request: Request) {
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
       speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),
-      voice_id: speaker?.voice_id || stableVoiceForSpeaker(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice),
+      voice_id: speaker?.voice_id || stableSpeakerVoice(speakerName, speakerProfiles.get(normalizeName(speakerName)) ?? shot.speaker_voice),
       voice_language: speaker?.voice_language || "zh",
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");

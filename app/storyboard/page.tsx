@@ -163,7 +163,7 @@ export default function StoryboardPage() {
     const generated = shots.filter((shot) => shot.audio_url || shot.video_url).length;
     if (generated && !window.confirm(`已有 ${generated} 个镜头生成过配音或视频。修改对白后，这些镜头需要重新制作，避免旧声音和口型错位。确定继续吗？`)) return;
     setBatching(true); setStatus("AI 正在逐镜修复对白、情绪、台词时长和连续性提示词…");
-    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`质量修复完成 · 已校准 ${data.shots.length} 个镜头 · 升级 ${data.upgradedPrompts ?? 0} 个连续性提示词 · 剩余 ${data.credits} 积分`); }
+    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`质量修复完成 · 已校准 ${data.shots.length} 个镜头 · 升级 ${data.upgradedPrompts ?? 0} 个连续性提示词 · 修正 ${data.upgradedVoices ?? 0} 个声线 · 剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "对白修复失败"); }
     finally { setBatching(false); }
   }
