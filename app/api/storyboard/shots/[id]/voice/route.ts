@@ -48,7 +48,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const requestedDuration = Math.min(15, Math.max(0, Number(body.targetDuration ?? 0)));
     if (requestedDuration > 0) {
       const estimatedSpeechSeconds = chineseUnits ? chineseUnits / (5 * speed) : 0;
-      const pauseCount = Math.min(12, Math.max(0, Math.ceil((requestedDuration - estimatedSpeechSeconds - 0.25) / 0.55)));
+      const pauseCount = Math.min(6, Math.max(0, Math.round((requestedDuration - estimatedSpeechSeconds - 0.25) / 1.35)));
       if (pauseCount) expressiveText += ` ${Array.from({ length: pauseCount }, () => "[long-pause]").join(" ")}`;
     }
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
