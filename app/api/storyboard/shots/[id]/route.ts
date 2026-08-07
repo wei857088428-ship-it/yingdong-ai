@@ -12,14 +12,30 @@ const templates = {
   wide: { shotType: "远景", camera: "缓慢拉远", image: "远景全貌，建立场景空间、人物位置与环境氛围", video: "从场景全貌缓慢拉远，展示环境规模与人物位置" },
 } as const;
 
+const performancePresets = {
+  tender: "温柔关切，强度2，语速偏慢，音量轻柔，句中自然停顿，潜台词是想让对方安心",
+  nervous: "紧张不安，强度3，语速稍快，音量偏低，关键处短暂停顿，潜台词是害怕被发现",
+  angry: "压抑愤怒，强度4，语速由慢转快，音量逐渐提高，重读关键字，潜台词是逼对方正面回应",
+  grieving: "悲伤哽咽，强度4，语速缓慢，音量低，句前吸气并在转折处停顿，潜台词是不愿接受失去",
+  determined: "坚定果断，强度4，语速稳定，音量清晰有力，结尾收紧，潜台词是已经作出不可动摇的决定",
+} as const;
+
 function applyPromptTemplate(prompt: string, label: string, instruction: string) {
   const clean = prompt.replace(/^\[镜头模板:[^\]]+\]\s*[^。]+。\s*/u, "");
   return `[镜头模板:${label}] ${instruction}。${clean}`.slice(0, 8000);
 }
 
+function applyPerformancePreset(sound: string, instruction: string) {
+  const existing = String(sound ?? "").trim();
+  const soundSection = existing.match(/；\s*(?:声音|环境声|动作音效)\s*[：:][\s\S]*$/)?.[0] ?? "";
+  if (soundSection) return `表演：${instruction}${soundSection}`;
+  if (/^(?:表演|情绪)\s*[：:]/.test(existing)) return `表演：${instruction}`;
+  return `表演：${instruction}${existing ? `；声音：${existing}` : ""}`;
+}
+
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  const { id } = await params; const body = (await request.json()) as { imageUrl?: string; videoUrl?: string; status?: string; error?: string; characterIds?: string[] | null; speakerCharacterId?: string | null; shotTemplate?: keyof typeof templates };
+  const { id } = await params; const body = (await request.json()) as { imageUrl?: string; videoUrl?: string; status?: string; error?: string; characterIds?: string[] | null; speakerCharacterId?: string | null; shotTemplate?: keyof typeof templates; performancePreset?: keyof typeof performancePresets };
   const updates: Record<string, string | string[] | null> = {};
   if (body.imageUrl) updates.image_url = body.imageUrl;
   if (body.videoUrl) updates.video_url = body.videoUrl;
@@ -54,6 +70,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     updates.audio_url = null; updates.subtitle_start_ms = null; updates.subtitle_end_ms = null; updates.error_message = null;
     const { data: current } = await supabase.from("storyboard_shots").select("media_status,project_id").eq("id", id).eq("user_id", user.id).maybeSingle();
     if (current?.media_status === "lipsync_ready") {
+      const sourceVideo = await originalVideoUrl(supabase, user.id, current.project_id, id);
+      updates.video_url = sourceVideo; updates.media_status = sourceVideo ? "completed" : "pending";
+    }
+  }
+  if (body.performancePreset && performancePresets[body.performancePreset]) {
+    const { data: current } = await supabase.from("storyboard_shots").select("sound,media_status,project_id").eq("id", id).eq("user_id", user.id).maybeSingle();
+    if (!current) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
+    updates.sound = applyPerformancePreset(String(current.sound ?? ""), performancePresets[body.performancePreset]);
+    updates.audio_url = null; updates.subtitle_start_ms = null; updates.subtitle_end_ms = null; updates.error_message = null;
+    if (current.media_status === "lipsync_ready") {
       const sourceVideo = await originalVideoUrl(supabase, user.id, current.project_id, id);
       updates.video_url = sourceVideo; updates.media_status = sourceVideo ? "completed" : "pending";
     }
