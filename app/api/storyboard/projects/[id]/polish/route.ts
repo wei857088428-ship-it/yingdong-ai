@@ -50,6 +50,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     const stateShots = shots.map((shot) => { const repaired=polished.find((item) => item.shot_number === shot.shot_number);return { ...shot, dramatic_function: String(repaired?.dramatic_function ?? "").trim(), causal_link: String(repaired?.causal_link ?? "").trim(), continuity_state: String(repaired?.continuity_state ?? "").trim() }; });
     let upgradedPrompts = 0;
     let upgradedVoices = 0;
+    let invalidatedVisuals = 0;
     for (const item of polished) {
       const current = shots.find((shot) => shot.shot_number === item.shot_number); if (!current) continue;
       const shotIndex = shots.findIndex((shot) => shot.id === current.id);
@@ -70,19 +71,24 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const performanceState = { ...currentState, dialogue: String(item.dialogue ?? "").trim(), speaker_name: speakerName || speaker?.name || "" };
       const imagePrompt = withContinuityPrompt(`${cleanImagePrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "image");
       const videoPrompt = withContinuityPrompt(`${cleanVideoPrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "video");
-      if (imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt) upgradedPrompts++;
+      const promptChanged = imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt;
+      if (promptChanged) upgradedPrompts++;
       const suggestedDuration = Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds)));
       const durationSeconds = current.audio_url || current.video_url ? Number(current.duration_seconds) : suggestedDuration;
       const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: durationSeconds, image_prompt: imagePrompt, video_prompt: videoPrompt, voice_id: voiceId, voice_language: speaker?.voice_language || current.voice_language || "zh", speaker_character_id: speakerCharacterId };
+      if (promptChanged && (current.image_url || current.video_url)) {
+        invalidatedVisuals++;
+        Object.assign(updates, { image_url: null, video_url: null, media_status: "pending", error_message: null });
+      }
       if (changed || voiceChanged) {
-        let reusableVideo = current.video_url ?? null;
-        if (current.media_status === "lipsync_ready") reusableVideo = await originalVideoUrl(supabase, user.id, current.project_id, current.id);
+        let reusableVideo = promptChanged ? null : current.video_url ?? null;
+        if (!promptChanged && current.media_status === "lipsync_ready") reusableVideo = await originalVideoUrl(supabase, user.id, current.project_id, current.id);
         Object.assign(updates, { audio_url: null, video_url: reusableVideo, subtitle_start_ms: null, subtitle_end_ms: null, media_status: reusableVideo ? "completed" : "pending", error_message: null });
       }
       const { error } = await supabase.from("storyboard_shots").update(updates).eq("id", current.id).eq("user_id", user.id); if (error) throw error;
     }
     const { data: updated } = await supabase.from("storyboard_shots").select("*").eq("project_id", id).eq("user_id", user.id).order("shot_number");
-    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits, upgradedPrompts, upgradedVoices });
+    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits, upgradedPrompts, upgradedVoices, invalidatedVisuals });
   } catch (error) {
     if (eventId) await finishUsage(user.id, eventId, false).catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "对白修复失败" }, { status: 500 });
