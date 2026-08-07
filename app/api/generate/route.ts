@@ -30,6 +30,10 @@ export async function POST(request: Request) {
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + charactersPrompt(characters), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution: body.resolution ?? "480p" };
     if (body.image) requestBody.image = { url: body.image };
+    else if (duration <= 10) {
+      const references = [...new Set(characters.flatMap((character) => [character.images?.front, character.images?.full, character.images?.left, character.images?.right]).filter((url): url is string => Boolean(url)))].slice(0, 7);
+      if (references.length) requestBody.reference_images = references.map((url) => ({ url }));
+    }
     const response = await fetch("https://api.x.ai/v1/videos/generations", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(requestBody), cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.error?.message ?? data?.message ?? "xAI 视频生成失败");
