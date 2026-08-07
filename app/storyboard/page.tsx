@@ -129,26 +129,23 @@ export default function StoryboardPage() {
 
   const lipSyncMode = (shot: Shot) => /特写|近景/.test(shot.shot_type || "") ? "precision" : "speed";
 
-  async function audioDuration(url?: string) {
-    if (!url) return undefined;
-    return await new Promise<number | undefined>((resolve) => {
-      const audio = new Audio(); const done = (value?: number) => { audio.src = ""; resolve(value); };
-      audio.preload = "metadata"; audio.onloadedmetadata = () => done(Number.isFinite(audio.duration) ? audio.duration : undefined); audio.onerror = () => done(); audio.src = url;
-      window.setTimeout(() => done(), 8000);
-    });
+  async function paddedWavBase64(url: string, targetSeconds: number) {
+    const response = await fetch(url); if (!response.ok) throw new Error("读取配音失败");
+    const context = new AudioContext();
+    try {
+      const source = await context.decodeAudioData(await response.arrayBuffer()); const channels = Math.min(2, source.numberOfChannels); const rate = source.sampleRate;
+      const frames = Math.ceil(targetSeconds * rate); const bytes = new ArrayBuffer(44 + frames * channels * 2); const view = new DataView(bytes);
+      const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+      write(0,"RIFF"); view.setUint32(4,36 + frames * channels * 2,true); write(8,"WAVE"); write(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,channels,true); view.setUint32(24,rate,true); view.setUint32(28,rate * channels * 2,true); view.setUint16(32,channels * 2,true); view.setUint16(34,16,true); write(36,"data"); view.setUint32(40,frames * channels * 2,true);
+      let offset = 44; for (let frame = 0; frame < frames; frame++) for (let channel = 0; channel < channels; channel++) { const samples = source.getChannelData(channel); const sample = frame < samples.length ? Math.max(-1,Math.min(1,samples[frame])) : 0; view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
+      const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return btoa(binary);
+    } finally { await context.close(); }
   }
 
   async function lipSyncOne(shot: Shot) {
     const mode = lipSyncMode(shot);
-    let workingShot = shot; let duration = await audioDuration(workingShot.audio_url);
-    if (duration && duration < workingShot.duration_seconds * 0.85) {
-      const speaker = characters.find((character) => character.id === workingShot.speaker_character_id);
-      const voiceResponse = await fetch(`/api/storyboard/shots/${workingShot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, targetDuration: workingShot.duration_seconds }) });
-      const voiceData = await voiceResponse.json(); if (!voiceResponse.ok) throw new Error(voiceData.error || "匹配视频时长的配音生成失败");
-      workingShot = { ...voiceData.shot, duration_seconds: shot.duration_seconds } as Shot; duration = await audioDuration(workingShot.audio_url);
-      setShots((current) => current.map((item) => item.id === shot.id ? workingShot : item));
-    }
-    const response = await fetch(`/api/storyboard/shots/${workingShot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, audioDuration: duration }) });
+    const paddedAudioBase64 = await paddedWavBase64(shot.audio_url!, shot.duration_seconds);
+    const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, paddedAudioBase64 }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));

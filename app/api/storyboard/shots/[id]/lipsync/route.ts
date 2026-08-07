@@ -29,13 +29,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!apiKey) return NextResponse.json({ error: "HeyGen 服务尚未配置" }, { status: 503 });
 
   const { id } = await params;
-  const body = await request.json().catch(() => ({})) as { mode?: string; audioDuration?: number };
+  const body = await request.json().catch(() => ({})) as { mode?: string; paddedAudioBase64?: string };
   const { supabase, shot } = await ownedShot(id, user.id);
   if (!shot) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
   if (!shot.video_url || !shot.audio_url) return NextResponse.json({ error: "请先生成视频和配音" }, { status: 400 });
 
   const closeShot = /特写|近景/.test(String(shot.shot_type ?? ""));
   const mode = body.mode === "speed" || body.mode === "precision" ? body.mode : closeShot ? "precision" : "speed";
+  let audioUrl = String(shot.audio_url);
+  if (body.paddedAudioBase64) {
+    const encoded = body.paddedAudioBase64.replace(/^data:audio\/wav;base64,/, "");
+    const audio = Buffer.from(encoded, "base64");
+    if (!audio.length || audio.length > 12_000_000) return NextResponse.json({ error: "口型同步音频无效或过大" }, { status: 400 });
+    const path = `${user.id}/${shot.project_id}/${shot.id}.lipsync.wav`;
+    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/wav", upsert: true });
+    if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 });
+    audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
+  }
   await supabase.from("storyboard_shots").update({ media_status: "lipsync_generating", error_message: null }).eq("id", id).eq("user_id", user.id);
 
   const response = await fetch(HEYGEN_URL, {
@@ -43,7 +53,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     headers: { "X-Api-Key": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({
       video: { type: "url", url: shot.video_url },
-      audio: { type: "url", url: shot.audio_url },
+      audio: { type: "url", url: audioUrl },
       mode,
       title: `影动AI · 镜头 ${shot.shot_number}`,
       enable_dynamic_duration: true,
@@ -51,9 +61,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       disable_music_track: true,
       keep_the_same_format: true,
       fps_mode: "passthrough",
-      ...(Number.isFinite(body.audioDuration) && Number(body.audioDuration) > 0.2
-        ? { start_time: 0, end_time: Math.min(Number(body.audioDuration), Number(shot.duration_seconds) || Number(body.audioDuration)) }
-        : {}),
     }),
   });
   const payload = await response.json().catch(() => ({}));
