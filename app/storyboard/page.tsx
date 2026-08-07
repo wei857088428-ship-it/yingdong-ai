@@ -8,7 +8,7 @@ import { supabase } from "@/app/lib/supabase";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
-type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
+type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string; images?: { front?: string; left?: string; right?: string; full?: string } };
 
 export default function StoryboardPage() {
   const router = useRouter();
@@ -21,7 +21,7 @@ export default function StoryboardPage() {
     const requestedId = new URLSearchParams(window.location.search).get("project");
     const [response, characterResult, requestedResponse] = await Promise.all([
       fetch("/api/storyboard", { cache: "no-store" }),
-      supabase.from("characters").select("id,name,version,voice_id,voice_language").order("updated_at", { ascending: false }),
+      supabase.from("characters").select("id,name,version,voice_id,voice_language,images").order("updated_at", { ascending: false }),
       requestedId ? fetch(`/api/storyboard/projects/${requestedId}`, { cache: "no-store" }) : Promise.resolve(null),
     ]);
     const loadedProjects = response.ok ? (await response.json()).projects as Project[] : [];
@@ -90,6 +90,7 @@ export default function StoryboardPage() {
 
   async function batchImages() {
     const pending = shots.filter((shot) => !shot.image_url); if (!pending.length) return setStatus("所有镜头都已有图片");
+    const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
     let previousShot = shots.filter((shot) => shot.shot_number < pending[0].shot_number && shot.image_url).toSorted((a,b) => b.shot_number-a.shot_number)[0];
@@ -153,7 +154,12 @@ export default function StoryboardPage() {
       if (spoken > shot.duration_seconds * 4.8) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），口型可能显得赶`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
       if (shot.dialogue?.trim() && !/(?:表演|情绪|强度)/.test(shot.sound || "")) warnings.push(`${label} 缺少明确情绪表演指令`);
-      if ((shot.character_names?.length ?? 0) > 0 && effectiveCharacterIds(shot).length === 0) warnings.push(`${label} 的剧情角色尚未绑定角色库`);
+      const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
+      const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
+      const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
+      if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
+      if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
+      for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
     }
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
   }
