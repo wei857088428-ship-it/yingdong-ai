@@ -217,7 +217,7 @@ export default function StoryboardPage() {
       const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
       write(0,"RIFF"); view.setUint32(4,36 + frames * channels * 2,true); write(8,"WAVE"); write(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,channels,true); view.setUint32(24,rate,true); view.setUint32(28,rate * channels * 2,true); view.setUint16(32,channels * 2,true); view.setUint16(34,16,true); write(36,"data"); view.setUint32(40,frames * channels * 2,true);
       let offset = 44; for (let frame = 0; frame < frames; frame++) { const sourceFrame = Math.floor(frame * source.sampleRate / rate); let sample = 0; if (sourceFrame < source.length) for (let channel = 0; channel < source.numberOfChannels; channel++) sample += source.getChannelData(channel)[sourceFrame] / source.numberOfChannels; sample = Math.max(-1,Math.min(1,sample)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
-      const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return btoa(binary);
+      const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return {base64:btoa(binary),audioSeconds:source.duration};
     } finally { await context.close(); }
   }
 
@@ -239,7 +239,9 @@ export default function StoryboardPage() {
     let jobId = "";
     if (!resuming) {
     const targetSeconds = await videoDurationSeconds(shot.video_url!);
-    const paddedAudioBase64 = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
+    const paddedAudio = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
+    const overrun=paddedAudio.audioSeconds-targetSeconds;const allowedOverrun=Math.max(.25,targetSeconds*.05);if(overrun>allowedOverrun)throw new Error(`镜头 ${shot.shot_number} 的配音 ${paddedAudio.audioSeconds.toFixed(1)} 秒，比视频 ${targetSeconds.toFixed(1)} 秒长 ${overrun.toFixed(1)} 秒。为避免口型错位，请按新配音时长重新生成这个视频后再同步口型`);
+    const paddedAudioBase64 = paddedAudio.base64;
     const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, paddedAudioBase64 }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
       jobId = String(created.jobId || "");
