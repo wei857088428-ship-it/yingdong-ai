@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { charactersPrompt, getCharacters } from "@/app/lib/characters";
+import { archiveGeneratedImage } from "@/app/lib/imageArchive";
 
 type ReferenceCharacter = { images?: { front?: string; full?: string; left?: string; right?: string } };
 
@@ -53,8 +54,10 @@ export async function POST(request: Request) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.error?.message ?? "图片生成失败");
-    const imageUrl = data?.data?.[0]?.url;
+    let imageUrl = data?.data?.[0]?.url;
     if (!imageUrl) throw new Error("图片已生成，但未返回图片地址");
+    try { imageUrl = await archiveGeneratedImage(imageUrl, user.id); }
+    catch (error) { console.error("Archive xAI image failed; using provider URL:", error); }
     const credits = await finishUsage(user.id, eventId, true);
     const content = "图片已经生成，可以打开或下载保存。";
     await Promise.all([
