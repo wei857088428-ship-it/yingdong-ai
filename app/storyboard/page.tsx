@@ -169,6 +169,7 @@ export default function StoryboardPage() {
     return !distant || intense ? "precision" : "speed";
   };
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
+  const requiresLipSync = (shot: Shot) => Boolean(shot.dialogue?.trim() && shot.speaker_character_id);
   function qualityReport(items: Shot[]) {
     const critical: string[] = []; const warnings: string[] = [];
     for (const shot of items) {
@@ -255,7 +256,7 @@ export default function StoryboardPage() {
 
   async function batchLipSync(onlyShot?: Shot) {
     if (batching) return;
-    const pending = (onlyShot ? [onlyShot] : shots).filter((shot) => shot.video_url && shot.audio_url && shot.dialogue?.trim() && !isLipSynced(shot));
+    const pending = (onlyShot ? [onlyShot] : shots).filter((shot) => shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot));
     if (!pending.length) return setStatus("没有等待口型同步的镜头，请先生成视频和配音");
     const estimate = pending.reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
     if (!onlyShot && !window.confirm(`将同步 ${pending.length} 个镜头的声音和口型，预计消耗 HeyGen 约 $${estimate.toFixed(2)} 美元。特写/近景使用高精度，其余使用快速模式。确定继续吗？`)) return;
@@ -274,10 +275,10 @@ export default function StoryboardPage() {
     const targetShots = retryShotIds ? shots.filter((shot) => retryShotIds.has(shot.id)) : shots;
     const quality = qualityReport(targetShots);
     if (quality.critical.length) return setStatus(`整集制作已暂停：${quality.critical.slice(0, 3).join("；")}`);
-    const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length; const lipSyncCount = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).length;
+    const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length; const lipSyncCount = targetShots.filter((shot) => requiresLipSync(shot) && !isLipSynced(shot)).length;
     const videoCreditCost=videoResolution==="720p"?112:80;const estimatedCredits = imageCount * 20 + videoCount * videoCreditCost + voiceCount * 2;
     const estimatedXaiVideo=targetShots.filter((shot)=>!shot.video_url).reduce((sum,shot)=>sum+Math.min(15,shot.duration_seconds)*(videoResolution==="720p"?.07:.05),0);
-    const estimatedHeyGen = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
+    const estimatedHeyGen = targetShots.filter((shot) => requiresLipSync(shot) && !isLipSynced(shot)).reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
     if (!imageCount && !videoCount && !voiceCount && !lipSyncCount) return setStatus("所选任务已经全部完成");
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
     const qualityNote = quality.warnings.length ? `\n\n制作检查 ${quality.score} 分，发现 ${quality.warnings.length} 项建议：\n${quality.warnings.slice(0, 4).join("\n")}` : "\n\n制作检查 100 分，未发现明显问题。";
@@ -310,7 +311,7 @@ export default function StoryboardPage() {
         try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); const workingIndex = working.findIndex((item) => item.id === shot.id); if (workingIndex >= 0) working[workingIndex] = data.shot; setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "配音生成失败" }); }
       }
-      const lipSyncShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.video_url && shot.audio_url && shot.dialogue?.trim() && !isLipSynced(shot));
+      const lipSyncShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot));
       for (let index = 0; index < lipSyncShots.length; index++) {
         const shot = lipSyncShots[index]; setStatus(`整集制作 5/5 · 同步声音与口型 ${index + 1}/${lipSyncShots.length} · 镜头 ${shot.shot_number}`);
         try { await lipSyncOne(shot); }
@@ -358,7 +359,7 @@ export default function StoryboardPage() {
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
             <button disabled={batching} onClick={batchVideos}>批量图片转视频 · {shots.filter((shot) => shot.image_url && !shot.video_url).length} 镜</button>
             <button disabled={batching} onClick={batchVoices}>批量生成配音 · {shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length} 镜</button>
-            <button disabled={batching} onClick={() => void batchLipSync()}>批量同步口型 · {shots.filter((shot) => shot.video_url && shot.audio_url && shot.dialogue?.trim() && !isLipSynced(shot)).length} 镜</button>
+            <button disabled={batching} onClick={() => void batchLipSync()}>批量同步口型 · {shots.filter((shot) => shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot)).length} 镜</button>
             <button disabled={batching} onClick={exportSrt}>导出 SRT 字幕</button>
           </div>
           <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "续写中…" : "AI 续写下一集"}</button>}{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
@@ -374,7 +375,7 @@ export default function StoryboardPage() {
             <div className="shot-templates"><b>镜头模板</b><button onClick={() => void applyShotTemplate(shot,"closeup","特写")}>特写</button><button onClick={() => void applyShotTemplate(shot,"near","近景")}>近景</button><button onClick={() => void applyShotTemplate(shot,"medium","中景")}>中景</button><button onClick={() => void applyShotTemplate(shot,"wide","远景")}>远景</button></div>
             <details><summary>绑定镜头角色 · {effectiveCharacterIds(shot).length} 人</summary><div>{characters.map((character) => <label key={character.id}><input type="checkbox" checked={effectiveCharacterIds(shot).includes(character.id)} onChange={(event) => void toggleShotCharacter(shot, character.id, event.target.checked)}/>{character.name} V{character.version}</label>)}</div></details>
             <details><summary>查看生成提示词</summary><div><b>图片</b><p>{shot.image_prompt}</p><b>视频</b><p>{shot.video_prompt}</p></div></details>
-            <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button>{shot.dialogue?.trim() && <button disabled={batching} onClick={() => void regenerateVoice(shot)}>{shot.audio_url ? "重新配音并试听" : "生成配音"}</button>}{shot.video_url && shot.audio_url && shot.dialogue?.trim() && <button disabled={batching || isLipSynced(shot)} onClick={() => void batchLipSync(shot)}>{isLipSynced(shot) ? "口型已同步" : "同步声音与口型"}</button>}</div>
+            <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button>{shot.dialogue?.trim() && <button disabled={batching} onClick={() => void regenerateVoice(shot)}>{shot.audio_url ? "重新配音并试听" : "生成配音"}</button>}{shot.video_url && shot.audio_url && requiresLipSync(shot) && <button disabled={batching || isLipSynced(shot)} onClick={() => void batchLipSync(shot)}>{isLipSynced(shot) ? "口型已同步" : "同步声音与口型"}</button>}</div>
           </article>)}</div>
         </div>}
       </div>
