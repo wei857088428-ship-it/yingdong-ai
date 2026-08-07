@@ -4,8 +4,9 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { expressiveSpeech } from "@/app/lib/expressiveSpeech";
+import { normalizeVoiceId, officialVoiceIds } from "@/app/lib/voiceCatalog";
 
-const voices = new Set(["ara", "eve", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris", "altair", "zenith", "perseus", "helios", "lux", "kepler"]);
+const voices = new Set<string>(officialVoiceIds);
 const languages = new Set(["zh", "en", "ja", "auto"]);
 type AudioTimestamps = { graph_chars?: string[]; graph_times?: number[][] };
 
@@ -37,7 +38,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (!text) return NextResponse.json({ error: "这个镜头没有对白或旁白" }, { status: 400 });
     const performanceContext = `${String(shot.action ?? "")} ${String(shot.sound ?? "")} ${(shot.character_names ?? []).join(" ")}`;
     const likelyFemale = /苏雨晴|女孩|少女|女人|女性|女主|她/.test(performanceContext) && !shot.speaker_character_id;
-    const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : likelyFemale ? "eve" : voices.has(body.fallbackVoiceId ?? "") ? body.fallbackVoiceId! : "rex";
+    const requestedVoice = normalizeVoiceId(body.voiceId, likelyFemale ? "eve" : "rex");
+    const fallbackVoice = normalizeVoiceId(body.fallbackVoiceId, likelyFemale ? "eve" : "rex");
+    const voiceId = voices.has(requestedVoice) ? requestedVoice : fallbackVoice;
     const performance = expressiveSpeech(text, performanceContext);
     const expressiveText = performance.text;
     const speed = Math.min(1.3, Math.max(0.7, Number(body.speed ?? performance.speed)));
