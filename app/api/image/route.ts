@@ -24,11 +24,16 @@ export async function POST(request: Request) {
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const finalPrompt = prompt + charactersPrompt(characters);
-    const continuityPrompt = body.referenceImage ? `${finalPrompt}\n\n连续镜头要求：以上一镜画面为视觉锚点，保持完全相同的人物身份、脸型、发型、服装、场景布局、道具位置、光线方向与色调；只改变当前镜头要求的动作和机位。不得重新设计人物或场景。` : finalPrompt;
-    const response = await fetch(body.referenceImage ? "https://api.x.ai/v1/images/edits" : "https://api.x.ai/v1/images/generations", {
+    const characterReferences = characters.flatMap((character) => [character.images?.front, character.images?.full, character.images?.left, character.images?.right]).filter((url): url is string => Boolean(url));
+    const referenceImages = [...new Set([body.referenceImage, ...characterReferences].filter((url): url is string => Boolean(url)))].slice(0, 3);
+    const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份；如果包含上一镜画面，同时保持场景布局、道具位置、光线方向与色调。只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
+    const editInput = referenceImages.length === 1
+      ? { image: { url: referenceImages[0], type: "image_url" } }
+      : { images: referenceImages.map((url) => ({ url, type: "image_url" })) };
+    const response = await fetch(referenceImages.length ? "https://api.x.ai/v1/images/edits" : "https://api.x.ai/v1/images/generations", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body.referenceImage
-        ? { model: "grok-imagine-image-quality", prompt: continuityPrompt, image: { url: body.referenceImage, type: "image_url" } }
+      body: JSON.stringify(referenceImages.length
+        ? { model: "grok-imagine-image-quality", prompt: continuityPrompt, ...editInput, aspect_ratio: body.aspectRatio }
         : { model: "grok-imagine-image-quality", prompt: continuityPrompt, n: 1, aspect_ratio: body.aspectRatio }), cache: "no-store",
     });
     const data = await response.json();
