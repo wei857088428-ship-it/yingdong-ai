@@ -212,13 +212,19 @@ export default function StoryboardPage() {
 
   async function lipSyncOne(shot: Shot) {
     const mode = lipSyncMode(shot);
+    const resuming = shot.media_status === "lipsync_generating";
+    let jobId = "";
+    if (!resuming) {
     const targetSeconds = await videoDurationSeconds(shot.video_url!);
     const paddedAudioBase64 = await paddedWavBase64(`/api/storyboard/shots/${shot.id}/audio`, targetSeconds);
     const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, paddedAudioBase64 }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
+      jobId = String(created.jobId || "");
+    }
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      const check = await fetch(`/api/storyboard/shots/${shot.id}/lipsync?jobId=${encodeURIComponent(created.jobId)}`, { cache: "no-store" });
+      const query = jobId ? `?jobId=${encodeURIComponent(jobId)}` : "";
+      const check = await fetch(`/api/storyboard/shots/${shot.id}/lipsync${query}`, { cache: "no-store" });
       const detail = await check.json(); if (!check.ok) throw new Error(detail.error || "查询口型同步任务失败");
       if (detail.status === "completed") { setShots((current) => current.map((item) => item.id === shot.id ? detail.shot : item)); return; }
       if (detail.status === "failed") throw new Error(detail.error || "口型同步失败");
@@ -294,7 +300,7 @@ export default function StoryboardPage() {
   }
 
   function retryFailedTasks() {
-    const failedIds = new Set(shots.filter((shot) => shot.media_status === "failed" || Boolean(shot.error_message)).map((shot) => shot.id));
+    const failedIds = new Set(shots.filter((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)).map((shot) => shot.id));
     if (!failedIds.size) return setStatus("当前没有失败任务");
     void generateFullEpisode(failedIds);
   }
@@ -327,7 +333,7 @@ export default function StoryboardPage() {
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>
             <button disabled={batching} onClick={runQualityCheck}>制作前质量检查</button>
             <button disabled={batching || !currentProjectId} onClick={() => void polishDialogue()}>AI 修复对白、情绪与连续性</button>
-            {shots.some((shot) => shot.media_status === "failed" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>一键重试失败任务 · {shots.filter((shot) => shot.media_status === "failed" || Boolean(shot.error_message)).length} 镜</button>}
+            {shots.some((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>恢复或重试任务 · {shots.filter((shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message)).length} 镜</button>}
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
             <button disabled={batching} onClick={batchVideos}>批量图片转视频 · {shots.filter((shot) => shot.image_url && !shot.video_url).length} 镜</button>
             <button disabled={batching} onClick={batchVoices}>批量生成配音 · {shots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length} 镜</button>
