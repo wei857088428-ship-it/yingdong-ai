@@ -15,7 +15,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const { id } = await params;
   let eventId = "";
   try {
-    const body = (await request.json()) as { voiceId?: string; fallbackVoiceId?: string; language?: string; speed?: number; batch?: boolean };
+    const body = (await request.json()) as { voiceId?: string; fallbackVoiceId?: string; language?: string; speed?: number; batch?: boolean; targetDuration?: number };
     const language = languages.has(body.language ?? "") ? body.language! : "zh";
     const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,sound,character_names,speaker_character_id").eq("id", id).eq("user_id", user.id).single();
     if (shotError || !shot) throw new Error("未找到这个分镜");
@@ -45,6 +45,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     else if (relieved) expressiveText = `[exhale] <soft>${expressiveText}</soft>`;
     else if (laughing) expressiveText = `[chuckle] <laugh-speak>${expressiveText}</laugh-speak>`;
     else if (/……|…/.test(expressiveText)) expressiveText = expressiveText.replace(/……|…/g, " [long-pause] ");
+    const requestedDuration = Math.min(15, Math.max(0, Number(body.targetDuration ?? 0)));
+    if (requestedDuration > 0) {
+      const estimatedSpeechSeconds = chineseUnits ? chineseUnits / (5 * speed) : 0;
+      const pauseCount = Math.min(12, Math.max(0, Math.ceil((requestedDuration - estimatedSpeechSeconds - 0.25) / 0.55)));
+      if (pauseCount) expressiveText += ` ${Array.from({ length: pauseCount }, () => "[long-pause]").join(" ")}`;
+    }
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/tts", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
