@@ -113,6 +113,20 @@ export default function StoryboardPage() {
     setBatching(false); setStatus("批量配音与字幕时间轴生成完成");
   }
 
+  async function regenerateVoice(shot: Shot) {
+    if (batching || !shot.dialogue?.trim()) return;
+    if (!window.confirm(`将重新生成镜头 ${shot.shot_number} 的配音，预计消耗 2 积分。确定继续吗？`)) return;
+    setBatching(true); setStatus(`正在重新配音 · 镜头 ${shot.shot_number}`);
+    try {
+      const speaker = characters.find((character) => character.id === shot.speaker_character_id);
+      const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error);
+      setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item));
+      setStatus(`镜头 ${shot.shot_number} 已使用 ${data.shot.voice_id} 重新配音，可直接试听`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : "重新配音失败"); }
+    finally { setBatching(false); }
+  }
+
   async function generateFullEpisode(retryShotIds?: Set<string>) {
     if (batching || !shots.length) return;
     const targetShots = retryShotIds ? shots.filter((shot) => retryShotIds.has(shot.id)) : shots;
@@ -192,7 +206,7 @@ export default function StoryboardPage() {
             <div className="shot-templates"><b>镜头模板</b><button onClick={() => void applyShotTemplate(shot,"closeup","特写")}>特写</button><button onClick={() => void applyShotTemplate(shot,"near","近景")}>近景</button><button onClick={() => void applyShotTemplate(shot,"medium","中景")}>中景</button><button onClick={() => void applyShotTemplate(shot,"wide","远景")}>远景</button></div>
             <details><summary>绑定镜头角色 · {effectiveCharacterIds(shot).length} 人</summary><div>{characters.map((character) => <label key={character.id}><input type="checkbox" checked={effectiveCharacterIds(shot).includes(character.id)} onChange={(event) => void toggleShotCharacter(shot, character.id, event.target.checked)}/>{character.name} V{character.version}</label>)}</div></details>
             <details><summary>查看生成提示词</summary><div><b>图片</b><p>{shot.image_prompt}</p><b>视频</b><p>{shot.video_prompt}</p></div></details>
-            <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button></div>
+            <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button>{shot.dialogue?.trim() && <button disabled={batching} onClick={() => void regenerateVoice(shot)}>{shot.audio_url ? "重新配音并试听" : "生成配音"}</button>}</div>
           </article>)}</div>
         </div>}
       </div>
