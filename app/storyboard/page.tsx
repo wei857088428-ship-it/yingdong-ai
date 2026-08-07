@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
 import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
+import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -70,10 +71,9 @@ export default function StoryboardPage() {
   const sameScene = (left: string, right: string) => { const a=sceneKey(left);const b=sceneKey(right);return Boolean(a&&b&&(a===b||a.includes(b)||b.includes(a))); };
   const imageReferenceContext = (shot: Shot, previous?: Shot, styleImage?: string) => {
     const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
-    const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
-    const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = currentIds.length >= 3;
-    const continuityImage = previous.image_url;
-    const referenceImage = continuityImage && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? continuityImage : undefined;
+    const previousCharacterIds=effectiveCharacterIds(previous);const previousIds = new Set(previousCharacterIds); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id));
+    const sceneContinues = sameScene(previous.scene, shot.scene);
+    const referenceImage = continuityReferenceImage(currentIds,previousCharacterIds,sceneContinues,previous.image_url);
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
 
