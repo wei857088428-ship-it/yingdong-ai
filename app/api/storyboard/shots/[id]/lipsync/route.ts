@@ -97,7 +97,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const status = String(data.status ?? "processing").toLowerCase();
   const videoUrl = String(data.video_url ?? data.output_url ?? "");
   if (["completed", "complete", "done", "success"].includes(status) && videoUrl) {
-    const { data: updated, error } = await supabase.from("storyboard_shots").update({ video_url: videoUrl, media_status: "lipsync_ready", error_message: null }).eq("id", id).eq("user_id", user.id).select("*").single();
+    const { data: updated, error } = await supabase.from("storyboard_shots").update({ video_url: videoUrl, media_status: "completed", error_message: null }).eq("id", id).eq("user_id", user.id).select("*").single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ status: "completed", shot: updated });
   }
