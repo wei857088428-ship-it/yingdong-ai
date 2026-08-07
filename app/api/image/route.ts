@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 500 });
   let eventId = "";
   try {
-    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; referenceImage?: string; batch?: boolean };
+    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; referenceImage?: string; referenceMode?: "scene" | "identity"; batch?: boolean };
     const prompt = body.prompt?.trim();
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
@@ -37,7 +37,10 @@ export async function POST(request: Request) {
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const finalPrompt = prompt + charactersPrompt(characters);
     const referenceImages = selectReferenceImages(body.referenceImage, characters);
-    const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份；如果包含上一镜画面，同时保持场景布局、道具位置、光线方向与色调。只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
+    const environmentRule = body.referenceMode === "identity"
+      ? "上一镜只用于继承人物身份、服装、伤势、随身道具与整体美术风格；当前提示词要求了新地点，因此必须自然切换到当前场景，不要复制上一镜背景。"
+      : "如果包含上一镜画面，同时保持场景布局、道具位置、人物站位、光线方向与色调。";
+    const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份。${environmentRule}只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
     const editInput = referenceImages.length === 1
       ? { image: { url: referenceImages[0], type: "image_url" } }
       : { images: referenceImages.map((url) => ({ url, type: "image_url" })) };
