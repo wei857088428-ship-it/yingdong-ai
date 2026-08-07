@@ -105,7 +105,7 @@ export default function StoryboardPage() {
       const shot = pending[index]; setStatus(`正在生成配音 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`);
       try {
         const speaker = characters.find((character) => character.id === shot.speaker_character_id);
-        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
+        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error);
         setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item));
       } catch (error) { setStatus(error instanceof Error ? error.message : "配音生成失败"); }
@@ -119,7 +119,7 @@ export default function StoryboardPage() {
     setBatching(true); setStatus(`正在重新配音 · 镜头 ${shot.shot_number}`);
     try {
       const speaker = characters.find((character) => character.id === shot.speaker_character_id);
-      const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage }) });
+      const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error);
       setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item));
       setStatus(`镜头 ${shot.shot_number} 已使用 ${data.shot.voice_id} 重新配音，可直接试听`);
@@ -208,7 +208,7 @@ export default function StoryboardPage() {
           if (shot.dialogue?.trim() && !shot.audio_url) {
             setStatus(`整集制作 2/4 · 先生成配音并校准时长 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
             const speaker = characters.find((character) => character.id === shot.speaker_character_id);
-            const voiceResponse = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
+            const voiceResponse = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) });
             const voiceData = await voiceResponse.json(); if (!voiceResponse.ok) throw new Error(voiceData.error);
             shot = voiceData.shot as Shot; working[index] = shot; setShots((current) => current.map((item) => item.id === shot.id ? shot : item));
           }
@@ -220,7 +220,7 @@ export default function StoryboardPage() {
       const voiceShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.dialogue?.trim() && !shot.audio_url);
       for (let index = 0; index < voiceShots.length; index++) {
         const shot = voiceShots[index]; setStatus(`整集制作 4/4 · 补充配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
-        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
+        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "配音生成失败" }); }
       }
       setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、匹配时长的视频和字幕时间轴全部完成");

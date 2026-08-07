@@ -4,7 +4,7 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string };
-type Character = { id: string; name: string; version: number };
+type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
 
 const shotProperties = {
   shot_number: { type: "integer" },
@@ -32,6 +32,21 @@ function cleanCharacterNames(names: string[]) {
 function matchCharacterId(name: string, characters: Character[]) {
   const requested = normalizeName(name);
   return characters.find((character) => normalizeName(character.name) === requested)?.id ?? null;
+}
+
+function matchCharacter(name: string, characters: Character[]) {
+  const requested = normalizeName(name);
+  return characters.find((character) => normalizeName(character.name) === requested);
+}
+
+function stableVoiceForSpeaker(name: string) {
+  const normalized = normalizeName(name);
+  if (!normalized) return "orion";
+  let hash = 0;
+  for (const char of normalized) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  const female = /苏雨晴|雨晴|女孩|少女|女人|女性|女主|小美|雪|月|瑶|娜|婷|兰|梅|芳/.test(name);
+  const choices = female ? ["eve", "carina", "luna", "iris"] : ["rex", "orion", "perseus", "zagan"];
+  return choices[hash % choices.length];
 }
 
 function storyboardSchema(shotCount: number) {
@@ -71,7 +86,7 @@ export async function POST(request: Request) {
     }
     if (!story || story.length < 30) return NextResponse.json({ error: "请粘贴至少30字的小说或剧情" }, { status: 400 });
     const apiKey = process.env.XAI_API_KEY; if (!apiKey) throw new Error("AI 服务尚未配置");
-    const { data: characterRows } = await supabase.from("characters").select("id,name,version").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30);
+    const { data: characterRows } = await supabase.from("characters").select("id,name,version,voice_id,voice_language").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30);
     const characters = (characterRows ?? []) as Character[];
     const characterCatalog = characters.length
       ? characters.map((character) => `${character.name} V${character.version}`).join("、")
@@ -84,6 +99,8 @@ export async function POST(request: Request) {
     const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => {
       const characterNames = cleanCharacterNames(Array.isArray(shot.character_names) ? shot.character_names : []);
       const dialogue = String(shot.dialogue ?? "");
+      const speakerName = String(shot.speaker_name ?? "");
+      const speaker = matchCharacter(speakerName, characters);
       const spokenUnits = [...dialogue.replace(/[\s，。！？、…,.!?]/g, "")].length;
       const dialogueMatchedDuration = spokenUnits ? Math.ceil(spokenUnits / 4.2 + 1) : Number(shot.duration_seconds ?? 5);
       return {
@@ -94,7 +111,9 @@ export async function POST(request: Request) {
       image_prompt: String(shot.image_prompt ?? ""), video_prompt: String(shot.video_prompt ?? ""),
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
-      speaker_character_id: matchCharacterId(String(shot.speaker_name ?? ""), characters),
+      speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),
+      voice_id: speaker?.voice_id || stableVoiceForSpeaker(speakerName),
+      voice_language: speaker?.voice_language || "zh",
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
     const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story, parent_project_id: parentProjectId }).select("id,title,created_at,parent_project_id").single();
