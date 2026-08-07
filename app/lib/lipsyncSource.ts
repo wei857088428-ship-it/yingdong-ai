@@ -14,6 +14,7 @@ export async function preserveLipSyncSource(supabase: SupabaseClient, userId: st
     } catch { /* Replace malformed or legacy source metadata below. */ }
   }
   const payload = new TextEncoder().encode(JSON.stringify({ version: 1, videoUrl }));
+  // storyboard-audio currently permits audio/mpeg only; the file extension identifies JSON metadata.
   const { error } = await supabase.storage.from("storyboard-audio").upload(path, payload, { contentType: "audio/mpeg", upsert: true });
   if (error && !/already exists|duplicate/i.test(error.message)) throw error;
 }

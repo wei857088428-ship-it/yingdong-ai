@@ -61,7 +61,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (uploadError) throw uploadError;
     const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.${version}.timings.json`;
     const timings = new TextEncoder().encode(JSON.stringify({ version: 1, cues: captionCues(text, payload.audio_timestamps) }));
-    await supabase.storage.from("storyboard-audio").upload(timingsPath, timings, { contentType: "application/json", upsert: true });
+    // This bucket currently permits audio/mpeg only; the .json path preserves the metadata format.
+    await supabase.storage.from("storyboard-audio").upload(timingsPath, timings, { contentType: "audio/mpeg", upsert: true });
     const audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
     const { data: projectShots } = await supabase.from("storyboard_shots").select("id,duration_seconds,shot_number").eq("project_id", shot.project_id).eq("user_id", user.id).order("shot_number");
     let startMs = 0;
