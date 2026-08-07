@@ -13,11 +13,12 @@ const batchPolicy: Partial<Record<UsageKind, { cost: number; limit: number; wind
   audio: { cost: 2, limit: 100, window: 3600 },
 };
 
-export async function reserveUsage(userId: string, kind: UsageKind, batch = false) {
+export async function reserveUsage(userId: string, kind: UsageKind, batch = false, costOverride?: number) {
   const supabase = await createServerSupabaseClient();
   const rule = batch ? batchPolicy[kind] ?? policy[kind] : policy[kind];
+  const cost = Number.isFinite(costOverride) ? Math.max(rule.cost, Math.round(costOverride!)) : rule.cost;
   const { data, error } = await supabase.rpc("reserve_credits", {
-    p_user_id: userId, p_kind: kind, p_cost: rule.cost, p_limit: rule.limit, p_window_seconds: rule.window,
+    p_user_id: userId, p_kind: kind, p_cost: cost, p_limit: rule.limit, p_window_seconds: rule.window,
   });
   if (error) throw new Error(error.message);
   const result = data as { ok: boolean; reason?: string; event_id?: string; credits?: number };
@@ -26,7 +27,7 @@ export async function reserveUsage(userId: string, kind: UsageKind, batch = fals
     if (result.reason === "rate_limit") throw new Error("操作太频繁，请稍后再试");
     throw new Error("账户积分状态异常，请联系管理员");
   }
-  return { eventId: result.event_id!, credits: Number(result.credits ?? 0), cost: rule.cost };
+  return { eventId: result.event_id!, credits: Number(result.credits ?? 0), cost };
 }
 
 export async function finishUsage(userId: string, eventId: string, success: boolean) {
