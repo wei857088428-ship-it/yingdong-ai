@@ -4,6 +4,18 @@ import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 
+type ReferenceCharacter = { images?: { front?: string; full?: string; left?: string; right?: string } };
+
+function selectReferenceImages(previousImage: string | undefined, characters: ReferenceCharacter[]) {
+  const primary = characters.map((character) => character.images?.front || character.images?.full || character.images?.left || character.images?.right).filter((url): url is string => Boolean(url));
+  const selected = [...new Set([previousImage, ...primary].filter((url): url is string => Boolean(url)))].slice(0, 3);
+  if (characters.length === 1 && selected.length < 3) {
+    const extra = [characters[0].images?.full, characters[0].images?.left, characters[0].images?.right].filter((url): url is string => Boolean(url));
+    for (const url of extra) if (!selected.includes(url) && selected.length < 3) selected.push(url);
+  }
+  return selected;
+}
+
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录后再生成图片" }, { status: 401 });
@@ -24,8 +36,7 @@ export async function POST(request: Request) {
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const finalPrompt = prompt + charactersPrompt(characters);
-    const characterReferences = characters.flatMap((character) => [character.images?.front, character.images?.full, character.images?.left, character.images?.right]).filter((url): url is string => Boolean(url));
-    const referenceImages = [...new Set([body.referenceImage, ...characterReferences].filter((url): url is string => Boolean(url)))].slice(0, 3);
+    const referenceImages = selectReferenceImages(body.referenceImage, characters);
     const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份；如果包含上一镜画面，同时保持场景布局、道具位置、光线方向与色调。只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
     const editInput = referenceImages.length === 1
       ? { image: { url: referenceImages[0], type: "image_url" } }
