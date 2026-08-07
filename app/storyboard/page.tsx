@@ -71,7 +71,7 @@ export default function StoryboardPage() {
     const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
     const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
     const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = !sharesCharacter && currentIds.length >= 3;
-    const continuityImage = previous.image_url || (sharesCharacter ? styleImage : undefined);
+    const continuityImage = previous.image_url;
     const referenceImage = continuityImage && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? continuityImage : undefined;
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
@@ -117,9 +117,9 @@ export default function StoryboardPage() {
     const quality = qualityReport(pending); if (quality.critical.length) return setStatus(`批量图片已暂停：${quality.critical.slice(0,3).join("；")}`);
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
-    let previousShot = shots.filter((shot) => shot.shot_number < pending[0].shot_number && shot.image_url).toSorted((a,b) => b.shot_number-a.shot_number)[0];
+    const workingImages=shots.map((shot)=>({...shot}));
     let styleImage = shots.filter((shot) => shot.image_url).toSorted((a,b) => a.shot_number-b.shot_number)[0]?.image_url;
-    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;previousShot={...shot,image_url:data.imageUrl}; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
+    for (let index = 0; index < pending.length; index++) { const shot = pending[index];const shotIndex=workingImages.findIndex((item)=>item.id===shot.id);const previousShot=workingImages.slice(0,Math.max(0,shotIndex)).toReversed().find((item)=>item.image_url); setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); const updated=await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" });if(shotIndex>=0)workingImages[shotIndex]=updated;styleImage ||= data.imageUrl; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
     setBatching(false); setStatus("批量图片生成完成");
   }
 
@@ -288,7 +288,7 @@ export default function StoryboardPage() {
     try {
       for (let index = 0; index < working.length; index++) {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/5 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
-        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=index>0?working[index-1]:undefined;const context=imageReferenceContext(shot,prior,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;working[index] = shot; }
+        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=working.slice(0,index).toReversed().find((item)=>item.image_url);const context=imageReferenceContext(shot,prior,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
       for (let index = 0; index < working.length; index++) {
