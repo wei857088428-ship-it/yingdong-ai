@@ -8,7 +8,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const { id } = await params;
   const supabase = await createServerSupabaseClient();
-  const { data: project, error } = await supabase.from("storyboard_projects").select("id,title,created_at,character_id,storyboard_shots(*)").eq("id", id).eq("user_id", user.id).single();
+  const { data: project, error } = await supabase.from("storyboard_projects").select("id,title,created_at,parent_project_id,character_id,storyboard_shots(*)").eq("id", id).eq("user_id", user.id).single();
   if (error || !project) return NextResponse.json({ error: "未找到这个分镜项目" }, { status: 404 });
   const includeSources = new URL(request.url).searchParams.get("includeSources") === "1";
   project.storyboard_shots = await Promise.all(project.storyboard_shots.toSorted((a, b) => a.shot_number - b.shot_number).map(async (shot) => ({
