@@ -129,9 +129,19 @@ export default function StoryboardPage() {
 
   const lipSyncMode = (shot: Shot) => /特写|近景/.test(shot.shot_type || "") ? "precision" : "speed";
 
+  async function audioDuration(url?: string) {
+    if (!url) return undefined;
+    return await new Promise<number | undefined>((resolve) => {
+      const audio = new Audio(); const done = (value?: number) => { audio.src = ""; resolve(value); };
+      audio.preload = "metadata"; audio.onloadedmetadata = () => done(Number.isFinite(audio.duration) ? audio.duration : undefined); audio.onerror = () => done(); audio.src = url;
+      window.setTimeout(() => done(), 8000);
+    });
+  }
+
   async function lipSyncOne(shot: Shot) {
     const mode = lipSyncMode(shot);
-    const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+    const duration = await audioDuration(shot.audio_url);
+    const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, audioDuration: duration }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
