@@ -5,6 +5,18 @@ import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
 const voices = new Set(["ara", "eve", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris", "altair", "zenith", "perseus", "helios", "lux", "kepler"]);
 const languages = new Set(["zh", "en", "ja", "auto"]);
+type AudioTimestamps = { graph_chars?: string[]; graph_times?: number[][] };
+
+function captionCues(dialogue: string, timestamps?: AudioTimestamps) {
+  const chars=timestamps?.graph_chars??[];const times=timestamps?.graph_times??[];if(!chars.length||chars.length!==times.length)return [];
+  const visible:Array<{char:string;start:number;end:number}>=[];let angle=0;let square=0;
+  for(let index=0;index<chars.length;index++){const char=chars[index];if(char==="<"){angle++;continue;}if(char===">"){angle=Math.max(0,angle-1);continue;}if(char==="["){square++;continue;}if(char==="]"){square=Math.max(0,square-1);continue;}if(angle||square)continue;const time=times[index];if(time?.length>=2)visible.push({char,start:Number(time[0]),end:Number(time[1])});}
+  const aligned:Array<{char:string;start:number;end:number}>=[];let cursor=0;for(const char of Array.from(dialogue)){let found=-1;for(let index=cursor;index<Math.min(visible.length,cursor+20);index++){if(visible[index].char===char){found=index;break;}}if(found>=0){aligned.push(visible[found]);cursor=found+1;}}
+  if(!aligned.length)return [];
+  const cues:Array<{text:string;start:number;end:number}>=[];let chunk:typeof aligned=[];let spoken=0;
+  for(const item of aligned){chunk.push(item);if(!/[\s，。！？、…,.!?]/.test(item.char))spoken++;if(/[。！？!?]/.test(item.char)||spoken>=12){cues.push({text:chunk.map((part)=>part.char).join("").trim(),start:chunk[0].start,end:chunk.at(-1)!.end});chunk=[];spoken=0;}}
+  if(chunk.length)cues.push({text:chunk.map((part)=>part.char).join("").trim(),start:chunk[0].start,end:chunk.at(-1)!.end});return cues.filter((cue)=>cue.text);
+}
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -53,12 +65,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const detail = await response.text();
       throw new Error(detail.slice(0, 300) || "xAI 配音生成失败");
     }
-    const payload = await response.json() as { audio?: string; duration?: number; content_type?: string };
+    const payload = await response.json() as { audio?: string; duration?: number; content_type?: string; audio_timestamps?: AudioTimestamps };
     if (!payload.audio) throw new Error("xAI 配音返回内容为空");
     const path = `${user.id}/${shot.project_id}/${shot.id}.mp3`;
     const audio = Uint8Array.from(Buffer.from(payload.audio, "base64"));
     const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: true });
     if (uploadError) throw uploadError;
+    const timingsPath = `${user.id}/${shot.project_id}/${shot.id}.timings.json`;
+    const timings = new TextEncoder().encode(JSON.stringify({ version: 1, cues: captionCues(text, payload.audio_timestamps) }));
+    await supabase.storage.from("storyboard-audio").upload(timingsPath, timings, { contentType: "audio/mpeg", upsert: true });
     const audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
     const { data: projectShots } = await supabase.from("storyboard_shots").select("id,duration_seconds,shot_number").eq("project_id", shot.project_id).eq("user_id", user.id).order("shot_number");
     let startMs = 0;
