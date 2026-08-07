@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
+import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; character_names: string[]; speaker_name: string };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -69,20 +70,6 @@ function parseJson(text: string) {
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
   if (start < 0 || end < start) throw new Error("AI 未返回有效分镜结构，请重试");
   return JSON.parse(cleaned.slice(start, end + 1)) as { title?: string; shots?: Shot[] };
-}
-
-function continuityPrompt(current: Shot, previous?: Shot, next?: Shot) {
-  const cast = cleanCharacterNames(Array.isArray(current.character_names) ? current.character_names : []).join("、") || "无具名角色";
-  const previousState = previous
-    ? `上一镜场景：${previous.scene}；上一镜结束动作：${previous.action}；上一镜人物：${cleanCharacterNames(previous.character_names ?? []).join("、") || "无具名角色"}。`
-    : "这是本集第一镜，必须明确建立人物位置、服装、随身道具、光线方向与环境布局。";
-  const transition = previous && String(previous.scene).trim() !== String(current.scene).trim()
-    ? "本镜发生场景变化，画面必须用可见的进入、离开、移动过程或明确建立镜头交代转换，禁止人物无解释瞬移。"
-    : "本镜延续同一场景，严格保持人物左右站位、朝向、服装、伤势、手持道具、环境布局、光线方向和时间状态；仅改变剧情要求的动作与表情。";
-  const nextState = next
-    ? `本镜结尾必须形成可被下一镜直接承接的明确状态；下一镜场景：${next.scene}；下一镜动作：${next.action}。`
-    : "本镜结尾必须停在清晰、可识别的悬念状态，不得在镜外自行完成后续事件。";
-  return `\n\n[逐镜连续性契约]\n当前画面人物：${cast}。${previousState}${transition}${nextState} 人物身份、脸、发型、体型与服装不得改变；不得增加未列出的主要人物、道具、动作或剧情结果。`;
 }
 
 export async function POST(request: Request) {
@@ -153,8 +140,8 @@ export async function POST(request: Request) {
       shot_type: String(shot.shot_type ?? ""), camera: String(shot.camera ?? ""), scene: String(shot.scene ?? ""),
       action: String(shot.action ?? ""), dialogue,
       sound: `表演：${String(shot.emotion ?? "自然，强度2，正常语速")}；声音：${String(shot.sound ?? "")}`,
-      image_prompt: `${String(shot.image_prompt ?? "")}${continuityPrompt(shot, parsedShots[index - 1], parsedShots[index + 1])}`,
-      video_prompt: `${String(shot.video_prompt ?? "")}${continuityPrompt(shot, parsedShots[index - 1], parsedShots[index + 1])}\n视频动作必须从本镜静帧的初始姿势自然开始，只完成“${String(shot.action ?? "")}”，并在下一镜可承接的姿势上结束；保持动作速度符合镜头时长，禁止中途跳切、瞬移、变脸、换装和无关动作。`,
+      image_prompt: withContinuityPrompt(String(shot.image_prompt ?? ""), shot, parsedShots[index - 1], parsedShots[index + 1], "image"),
+      video_prompt: withContinuityPrompt(String(shot.video_prompt ?? ""), shot, parsedShots[index - 1], parsedShots[index + 1], "video"),
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
       speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),
