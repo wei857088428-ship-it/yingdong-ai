@@ -39,7 +39,7 @@ export default function StoryboardPage() {
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
 
-  async function updateShot(id: string, body: Record<string, string | string[] | null>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error((await response.json()).error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, image_url: typeof body.imageUrl === "string" ? body.imageUrl : shot.image_url, video_url: typeof body.videoUrl === "string" ? body.videoUrl : shot.video_url, media_status: typeof body.status === "string" ? body.status : shot.media_status, error_message: typeof body.error === "string" ? body.error : shot.error_message, character_ids: Array.isArray(body.characterIds) ? body.characterIds : body.characterIds === null ? null : shot.character_ids } : shot)); }
+  async function updateShot(id: string, body: Record<string, string | string[] | null>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, ...data.shot } : shot)); }
 
   const effectiveCharacterIds = (shot: Shot) => Array.isArray(shot.character_ids) ? shot.character_ids : characterId ? [characterId] : [];
   const missingCharacterNames = (shot: Shot) => (shot.character_names ?? []).filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
@@ -48,6 +48,11 @@ export default function StoryboardPage() {
     const current = effectiveCharacterIds(shot); const next = checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
     await updateShot(shot.id, { characterIds: next });
     setStatus(`镜头 ${shot.shot_number} 已绑定 ${next.length} 个角色`);
+  }
+
+  async function applyShotTemplate(shot: Shot, template: "closeup" | "near" | "medium" | "wide", label: string) {
+    try { await updateShot(shot.id, { shotTemplate: template }); setStatus(`镜头 ${shot.shot_number} 已应用${label}模板，提示词和运镜已自动更新`); }
+    catch (error) { setStatus(error instanceof Error ? error.message : "应用镜头模板失败"); }
   }
 
   async function continueProject() {
@@ -146,6 +151,7 @@ export default function StoryboardPage() {
             <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.speaker_character_id && <span>对白：{characters.find((character) => character.id === shot.speaker_character_id)?.name}</span>}{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
             <h3>{shot.scene}</h3><p><b>动作</b>{shot.action}</p>{shot.dialogue && <p><b>对白/字幕</b>{shot.dialogue}</p>}{shot.error_message && <p className="shot-error"><b>错误</b>{shot.error_message}</p>}
             {missingCharacterNames(shot).length > 0 && <div className="missing-characters"><b>缺少角色设定</b>{missingCharacterNames(shot).map((name) => <Link key={name} href={`/characters?name=${encodeURIComponent(name)}`}>创建 {name} →</Link>)}</div>}
+            <div className="shot-templates"><b>镜头模板</b><button onClick={() => void applyShotTemplate(shot,"closeup","特写")}>特写</button><button onClick={() => void applyShotTemplate(shot,"near","近景")}>近景</button><button onClick={() => void applyShotTemplate(shot,"medium","中景")}>中景</button><button onClick={() => void applyShotTemplate(shot,"wide","远景")}>远景</button></div>
             <details><summary>绑定镜头角色 · {effectiveCharacterIds(shot).length} 人</summary><div>{characters.map((character) => <label key={character.id}><input type="checkbox" checked={effectiveCharacterIds(shot).includes(character.id)} onChange={(event) => void toggleShotCharacter(shot, character.id, event.target.checked)}/>{character.name} V{character.version}</label>)}</div></details>
             <details><summary>查看生成提示词</summary><div><b>图片</b><p>{shot.image_prompt}</p><b>视频</b><p>{shot.video_prompt}</p></div></details>
             <div className="shot-actions"><button onClick={() => sendToStudio(shot,"image")}>单张生成 ↗</button><button onClick={() => sendToStudio(shot,"video")}>单镜视频 ↗</button></div>
