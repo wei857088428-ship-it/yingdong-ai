@@ -129,6 +129,27 @@ export default function StoryboardPage() {
 
   const lipSyncMode = (shot: Shot) => /特写|近景/.test(shot.shot_type || "") ? "precision" : "speed";
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
+  function qualityReport(items: Shot[]) {
+    const critical: string[] = []; const warnings: string[] = [];
+    for (const shot of items) {
+      const label = `镜头 ${shot.shot_number}`;
+      if (!shot.image_prompt?.trim() || !shot.video_prompt?.trim()) critical.push(`${label} 缺少图片或视频提示词`);
+      if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
+      const spoken = Array.from((shot.dialogue || "").replace(/[\s，。！？、…,.!?]/g, "")).length;
+      if (spoken > shot.duration_seconds * 4.8) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），口型可能显得赶`);
+      if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
+      if (shot.dialogue?.trim() && !/(?:表演|情绪|强度)/.test(shot.sound || "")) warnings.push(`${label} 缺少明确情绪表演指令`);
+      if ((shot.character_names?.length ?? 0) > 0 && effectiveCharacterIds(shot).length === 0) warnings.push(`${label} 的剧情角色尚未绑定角色库`);
+    }
+    return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
+  }
+
+  function runQualityCheck() {
+    const report = qualityReport(shots);
+    if (report.critical.length) return setStatus(`制作检查 ${report.score} 分 · 必须修正：${report.critical.slice(0, 3).join("；")}`);
+    if (report.warnings.length) return setStatus(`制作检查 ${report.score} 分 · 建议优化：${report.warnings.slice(0, 3).join("；")}`);
+    setStatus("制作检查 100 分 · 剧情、角色、台词时长和情绪指令均可进入整集制作");
+  }
 
   async function paddedWavBase64(url: string, targetSeconds: number) {
     const response = await fetch(url); if (!response.ok) throw new Error("读取配音失败");
@@ -190,12 +211,15 @@ export default function StoryboardPage() {
   async function generateFullEpisode(retryShotIds?: Set<string>) {
     if (batching || !shots.length) return;
     const targetShots = retryShotIds ? shots.filter((shot) => retryShotIds.has(shot.id)) : shots;
+    const quality = qualityReport(targetShots);
+    if (quality.critical.length) return setStatus(`整集制作已暂停：${quality.critical.slice(0, 3).join("；")}`);
     const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length; const lipSyncCount = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).length;
     const estimatedCredits = imageCount * 20 + videoCount * 80 + voiceCount * 2;
     const estimatedHeyGen = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
     if (!imageCount && !videoCount && !voiceCount && !lipSyncCount) return setStatus("所选任务已经全部完成");
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
-    if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段视频、${voiceCount} 段配音与字幕、${lipSyncCount} 段口型同步；预计最多消耗 ${estimatedCredits} 积分和 HeyGen 约 $${estimatedHeyGen.toFixed(2)} 美元，已成功内容不会重复生成。确定继续吗？`)) return;
+    const qualityNote = quality.warnings.length ? `\n\n制作检查 ${quality.score} 分，发现 ${quality.warnings.length} 项建议：\n${quality.warnings.slice(0, 4).join("\n")}` : "\n\n制作检查 100 分，未发现明显问题。";
+    if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段视频、${voiceCount} 段配音与字幕、${lipSyncCount} 段口型同步；预计最多消耗 ${estimatedCredits} 积分和 HeyGen 约 $${estimatedHeyGen.toFixed(2)} 美元，已成功内容不会重复生成。${qualityNote}\n\n确定继续吗？`)) return;
     setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;
     try {
       for (let index = 0; index < working.length; index++) {
@@ -265,6 +289,7 @@ export default function StoryboardPage() {
             <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}><option value="rex">Rex · 戏剧感男声</option><option value="eve">Eve · 情绪女声</option><option value="leo">Leo · 沉稳男声</option><option value="ara">Ara · 自然女声</option><option value="orion">Orion · 电影旁白</option><option value="carina">Carina · 温柔女声</option><option value="zagan">Zagan · 戏剧角色</option><option value="luna">Luna · 亲和女声</option><option value="iris">Iris · 活泼女声</option><option value="perseus">Perseus · 自信男声</option></select></div>
             <div><label>配音语言</label><select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}><option value="zh">普通话</option><option value="en">英语</option><option value="ja">日语</option><option value="auto">自动识别（可尝试粤语）</option></select></div>
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>
+            <button disabled={batching} onClick={runQualityCheck}>制作前质量检查</button>
             {shots.some((shot) => shot.media_status === "failed" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>一键重试失败任务 · {shots.filter((shot) => shot.media_status === "failed" || Boolean(shot.error_message)).length} 镜</button>}
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
             <button disabled={batching} onClick={batchVideos}>批量图片转视频 · {shots.filter((shot) => shot.image_url && !shot.video_url).length} 镜</button>
