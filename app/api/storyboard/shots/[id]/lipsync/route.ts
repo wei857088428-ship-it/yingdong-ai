@@ -29,7 +29,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!apiKey) return NextResponse.json({ error: "HeyGen 服务尚未配置" }, { status: 503 });
 
   const { id } = await params;
-  const body = await request.json().catch(() => ({})) as { mode?: string };
+  const body = await request.json().catch(() => ({})) as { mode?: string; audioDuration?: number };
   const { supabase, shot } = await ownedShot(id, user.id);
   if (!shot) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
   if (!shot.video_url || !shot.audio_url) return NextResponse.json({ error: "请先生成视频和配音" }, { status: 400 });
@@ -46,11 +46,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       audio: { type: "url", url: shot.audio_url },
       mode,
       title: `影动AI · 镜头 ${shot.shot_number}`,
-      enableDynamicDuration: true,
-      enableCaption: false,
-      disableMusicTrack: true,
-      keepTheSameFormat: true,
-      fpsMode: "passthrough",
+      enable_dynamic_duration: true,
+      enable_caption: false,
+      disable_music_track: true,
+      keep_the_same_format: true,
+      fps_mode: "passthrough",
+      ...(Number.isFinite(body.audioDuration) && Number(body.audioDuration) > 0.2
+        ? { start_time: 0, end_time: Math.min(Number(body.audioDuration), Number(shot.duration_seconds) || Number(body.audioDuration)) }
+        : {}),
     }),
   });
   const payload = await response.json().catch(() => ({}));
