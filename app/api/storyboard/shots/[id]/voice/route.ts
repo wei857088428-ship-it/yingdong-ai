@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 
-const voices = new Set(["orion", "carina", "zagan", "luna", "iris", "altair", "perseus", "ara", "eve", "leo", "rex", "sal"]);
+const voices = new Set(["ara", "eve", "leo", "rex", "sal"]);
 const languages = new Set(["zh", "en", "ja", "auto"]);
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -31,28 +31,43 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const targetSeconds = Math.max(2, Number(shot.duration_seconds ?? 5) - 0.35);
     const durationMatchedSpeed = chineseUnits ? chineseUnits / (5 * targetSeconds) : 1;
     const emotionFactor = whispering || grieving ? 0.92 : urgent ? 1.04 : 1;
-    const speed = Math.min(1.3, Math.max(0.6, Number(body.speed ?? durationMatchedSpeed * emotionFactor)));
+    const speed = Math.min(1.3, Math.max(0.7, Number(body.speed ?? durationMatchedSpeed * emotionFactor)));
+    const angry = /愤怒|暴怒|咆哮|怒吼|质问|仇恨/.test(performanceContext);
+    const frightened = /惊恐|恐惧|害怕|颤抖|危险|怪物|丧尸/.test(performanceContext);
+    const relieved = /松了口气|如释重负|终于安全|得救/.test(performanceContext);
+    const laughing = /笑|大笑|轻笑|开心|兴奋/.test(performanceContext);
     const punctuatedText = urgent ? text.replace(/[。.]$/u, "！") : grieving ? text.replace(/，/g, "……") : text;
-    const expressiveText = whispering ? `<whisper>${punctuatedText}</whisper>` : punctuatedText;
+    let expressiveText = punctuatedText;
+    if (whispering) expressiveText = `<whisper><soft>${expressiveText}</soft></whisper>`;
+    else if (angry) expressiveText = `<build-intensity><loud>${expressiveText}</loud></build-intensity>`;
+    else if (grieving) expressiveText = `[sigh] <slow><soft>${expressiveText}</soft></slow> [cry]`;
+    else if (frightened) expressiveText = `[inhale] <higher-pitch>${expressiveText}</higher-pitch> [breath]`;
+    else if (relieved) expressiveText = `[exhale] <soft>${expressiveText}</soft>`;
+    else if (laughing) expressiveText = `[chuckle] <laugh-speak>${expressiveText}</laugh-speak>`;
+    else if (/……|…/.test(expressiveText)) expressiveText = expressiveText.replace(/……|…/g, " [long-pause] ");
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/tts", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text: expressiveText, voice_id: voiceId, language, speed, output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 } }), cache: "no-store",
+      body: JSON.stringify({ text: expressiveText, voice_id: voiceId, language, speed, with_timestamps: true, output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 } }), cache: "no-store",
     });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(detail.slice(0, 300) || "xAI 配音生成失败");
     }
+    const payload = await response.json() as { audio?: string; duration?: number; content_type?: string };
+    if (!payload.audio) throw new Error("xAI 配音返回内容为空");
     const path = `${user.id}/${shot.project_id}/${shot.id}.mp3`;
-    const audio = new Uint8Array(await response.arrayBuffer());
+    const audio = Uint8Array.from(Buffer.from(payload.audio, "base64"));
     const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: true });
     if (uploadError) throw uploadError;
     const audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
     const { data: projectShots } = await supabase.from("storyboard_shots").select("id,duration_seconds,shot_number").eq("project_id", shot.project_id).eq("user_id", user.id).order("shot_number");
     let startMs = 0;
     for (const item of projectShots ?? []) { if (item.id === shot.id) break; startMs += Number(item.duration_seconds ?? 5) * 1000; }
-    const endMs = startMs + Number(shot.duration_seconds ?? 5) * 1000;
-    const { data: updated, error: updateError } = await supabase.from("storyboard_shots").update({ audio_url: audioUrl, voice_id: voiceId, voice_language: language, subtitle_start_ms: startMs, subtitle_end_ms: endMs }).eq("id", shot.id).eq("user_id", user.id).select("*").single();
+    const audioDuration = Math.max(0, Number(payload.duration ?? 0));
+    const matchedDuration = Math.min(15, Math.max(2, Math.ceil(audioDuration + 0.35)));
+    const endMs = startMs + Math.round(audioDuration * 1000);
+    const { data: updated, error: updateError } = await supabase.from("storyboard_shots").update({ audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs }).eq("id", shot.id).eq("user_id", user.id).select("*").single();
     if (updateError) throw updateError;
     const credits = await finishUsage(user.id, eventId, true);
     return NextResponse.json({ shot: updated, credits });
