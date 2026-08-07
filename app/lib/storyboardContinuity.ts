@@ -1,4 +1,4 @@
-type ContinuityShot = { scene?: string; action?: string; character_names?: string[] | null; continuity_state?: string; image_prompt?: string; video_prompt?: string };
+type ContinuityShot = { scene?: string; action?: string; dialogue?: string; speaker_name?: string; character_names?: string[] | null; continuity_state?: string; image_prompt?: string; video_prompt?: string };
 
 function names(values?: string[] | null) {
   return [...new Set((values ?? []).map((value) => String(value).trim()).filter(Boolean))].slice(0, 6);
@@ -31,6 +31,14 @@ export function withContinuityPrompt(prompt: string, current: ContinuityShot, pr
   const currentLedger = ledger(current); const previousLedger = ledger(previous); const nextLedger = ledger(next);
   const ledgerContract = `\n状态账本：上一镜结束=${previousLedger || "无"}；本镜结束=${currentLedger || "必须按画面明确建立"}；下一镜目标=${nextLedger || "无"}。未被本镜可见事件改变的状态必须逐项继承。`;
   const contract = `${continuityContract(current, previous, next)}${ledgerContract}`;
-  if (mode === "image") return `${base}${contract}`;
-  return `${base}${contract}\n视频动作必须从本镜静帧的初始姿势自然开始，只完成“${String(current.action ?? "")}”，并在下一镜可承接的姿势上结束；保持动作速度符合镜头时长，禁止中途跳切、瞬移、变脸、换装和无关动作。`;
+  const hasDialogue = Boolean(String(current.dialogue ?? "").trim());
+  const speaker = String(current.speaker_name ?? "").trim() || "唯一说话角色";
+  const dialogueFraming = hasDialogue
+    ? `\n[对白构图]\n${speaker}的正脸或四分之三侧脸清晰可见，嘴唇和下巴无遮挡、不过暗、不出画；其他人物保持闭嘴，不做说话口型。`
+    : "";
+  if (mode === "image") return `${base}${contract}${dialogueFraming}`;
+  const lipSyncContract = hasDialogue
+    ? `\n[口型同步准备]\n本镜只有${speaker}说话；说话期间保持其完整脸部和嘴部持续清晰可见，头部转动幅度小，不遮嘴、不背对镜头、不切镜；其他人物全程闭嘴且不做说话口型。开头和结尾各保留短暂稳定表情与自然闭嘴姿势。`
+    : "";
+  return `${base}${contract}${dialogueFraming}${lipSyncContract}\n视频动作必须从本镜静帧的初始姿势自然开始，只完成“${String(current.action ?? "")}”，并在下一镜可承接的姿势上结束；保持动作速度符合镜头时长，禁止中途跳切、瞬移、变脸、换装和无关动作。`;
 }

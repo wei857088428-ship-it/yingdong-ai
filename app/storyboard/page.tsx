@@ -6,6 +6,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
+import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
+import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -69,10 +71,9 @@ export default function StoryboardPage() {
   const sameScene = (left: string, right: string) => { const a=sceneKey(left);const b=sceneKey(right);return Boolean(a&&b&&(a===b||a.includes(b)||b.includes(a))); };
   const imageReferenceContext = (shot: Shot, previous?: Shot, styleImage?: string) => {
     const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
-    const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
-    const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = !sharesCharacter && currentIds.length >= 3;
-    const continuityImage = previous.image_url;
-    const referenceImage = continuityImage && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? continuityImage : undefined;
+    const previousCharacterIds=effectiveCharacterIds(previous);const previousIds = new Set(previousCharacterIds); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id));
+    const sceneContinues = sameScene(previous.scene, shot.scene);
+    const referenceImage = continuityReferenceImage(currentIds,previousCharacterIds,sceneContinues,previous.image_url);
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
 
@@ -178,16 +179,30 @@ export default function StoryboardPage() {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
-    const critical: string[] = []; const warnings: string[] = [];
+    const critical: string[] = []; const warnings: string[] = []; const seenDramaticFunctions = new Map<string,number>();
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
       if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
+      if (includeVisual && shot.image_prompt?.trim() && shot.video_prompt?.trim()) {
+        const contractComplete = [shot.image_prompt, shot.video_prompt].every((prompt) => {
+          const dramaticFunction = prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
+          const causalLink = prompt.match(/\[CAUSAL LINK\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
+          const continuityState = prompt.match(/\[CONTINUITY STATE\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
+          return dramaticFunction.length >= 15 && causalLink.length >= 10 && continuityState.length >= 20;
+        });
+        if (!contractComplete) critical.push(`${label} 缺少剧情推进、因果链或镜头结束状态，需先执行 AI 修复对白与连续性`);
+        const dramaticFunction=shot.video_prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim()??"";const normalizedFunction=normalizeDramaticFunction(dramaticFunction);
+        if(normalizedFunction){const duplicate=seenDramaticFunctions.get(normalizedFunction);if(duplicate)critical.push(`${label} 与镜头 ${duplicate} 的剧情功能完全重复，需先执行 AI 修复`);else seenDramaticFunctions.set(normalizedFunction,shot.shot_number);}
+        if (shot.dialogue?.trim() && shot.speaker_character_id && !/\[口型同步准备\]/.test(shot.video_prompt)) critical.push(`${label} 缺少说话人脸部与闭嘴约束，需先执行 AI 修复对白与连续性`);
+      }
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
       const spoken = Array.from((shot.dialogue || "").replace(/[\s，。！？、…,.!?]/g, "")).length;
       const mildDialogueLimit = shot.duration_seconds * 4.2;
       const severeDialogueLimit = shot.duration_seconds * 5.2;
       if (includePerformance && spoken > severeDialogueLimit) critical.push(`${label} 台词严重超长（${spoken} 字/${shot.duration_seconds} 秒），必须缩短或延长镜头后再配音`);
       else if (includePerformance && spoken > mildDialogueLimit) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），建议缩短以保留情绪和呼吸空间`);
+      const speakerLabels = [...(shot.dialogue || "").matchAll(/(?:^|[\n。！？!?]\s*)([\p{L}\p{N}_·]{1,12})\s*[：:]/gu)].map((match) => match[1].trim());
+      if (includePerformance && new Set(speakerLabels).size > 1) critical.push(`${label} 同时包含多个说话人（${[...new Set(speakerLabels)].join("、")}），必须拆成一人一镜再配音和同步口型`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
       const performance = shot.sound || "";
       const hasPerformanceDirection = /(?:表演|情绪|语气|口吻)\s*[:：]\s*\S+/.test(performance)
@@ -200,7 +215,12 @@ export default function StoryboardPage() {
         const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
         if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
         if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
-        for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+        for (const id of boundIds) {
+          const character=characters.find((item)=>item.id===id); const referenceCount=character ? Object.values(character.images ?? {}).filter(Boolean).length : 0;
+          if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);
+          else if(referenceCount<3)critical.push(`${label} 的 ${character.name} 只有 ${referenceCount}/4 个参考角度，至少补到 3 个再制作`);
+          else if(referenceCount<4)warnings.push(`${label} 的 ${character.name} 已有 ${referenceCount}/4 个参考角度，补齐全身或侧面图会更稳定`);
+        }
       }
     }
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
@@ -215,10 +235,10 @@ export default function StoryboardPage() {
 
   async function polishDialogue() {
     if (!currentProjectId || batching) return;
-    const generated = shots.filter((shot) => shot.audio_url || shot.video_url).length;
-    if (generated && !window.confirm(`已有 ${generated} 个镜头生成过配音或视频。修改对白后，这些镜头需要重新制作，避免旧声音和口型错位。确定继续吗？`)) return;
+    const generated = shots.filter((shot) => shot.image_url || shot.audio_url || shot.video_url).length;
+    if (generated && !window.confirm(`已有 ${generated} 个镜头生成过配音或视频。修复会改写剧情推进、连续性或对白；提示词发生变化的旧画面将作废，声音变化的旧配音和口型也会作废，避免新旧内容混用。确定继续吗？`)) return;
     setBatching(true); setStatus("AI 正在逐镜修复对白、情绪、台词时长和连续性提示词…");
-    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`质量修复完成 · 已校准 ${data.shots.length} 个镜头 · 升级 ${data.upgradedPrompts ?? 0} 个连续性提示词 · 修正 ${data.upgradedVoices ?? 0} 个声线 · 剩余 ${data.credits} 积分`); }
+    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`质量修复完成 · 已校准 ${data.shots.length} 个镜头 · 升级 ${data.upgradedPrompts ?? 0} 个剧情与连续性提示词 · 修正 ${data.upgradedVoices ?? 0} 个声线 · ${data.invalidatedVisuals ?? 0} 个旧画面需重新生成 · 剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "对白修复失败"); }
     finally { setBatching(false); }
   }
@@ -228,7 +248,7 @@ export default function StoryboardPage() {
     const context = new AudioContext();
     try {
       const source = await context.decodeAudioData(await response.arrayBuffer()); const channels = 1; const rate = 16000;
-      const outputSeconds=Math.min(30,Math.max(targetSeconds,source.duration+0.35));const frames = Math.ceil(outputSeconds * rate); const bytes = new ArrayBuffer(44 + frames * channels * 2); const view = new DataView(bytes);
+      const outputSeconds=Math.min(30,Math.max(targetSeconds,source.duration));const frames = Math.ceil(outputSeconds * rate); const bytes = new ArrayBuffer(44 + frames * channels * 2); const view = new DataView(bytes);
       const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
       write(0,"RIFF"); view.setUint32(4,36 + frames * channels * 2,true); write(8,"WAVE"); write(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,channels,true); view.setUint32(24,rate,true); view.setUint32(28,rate * channels * 2,true); view.setUint16(32,channels * 2,true); view.setUint16(34,16,true); write(36,"data"); view.setUint32(40,frames * channels * 2,true);
       let offset = 44; for (let frame = 0; frame < frames; frame++) { const sourceFrame = Math.floor(frame * source.sampleRate / rate); let sample = 0; if (sourceFrame < source.length) for (let channel = 0; channel < source.numberOfChannels; channel++) sample += source.getChannelData(channel)[sourceFrame] / source.numberOfChannels; sample = Math.max(-1,Math.min(1,sample)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
@@ -389,6 +409,7 @@ export default function StoryboardPage() {
             <div className="shot-number">镜头 {String(shot.shot_number).padStart(2,"0")}<b>{shot.duration_seconds}s</b></div>
             <div className="shot-tags"><span>{shot.shot_type}</span><span>{shot.camera}</span>{shot.speaker_character_id && <span>对白：{characters.find((character) => character.id === shot.speaker_character_id)?.name}</span>}{shot.media_status && <span>{shot.media_status}</span>}{shot.audio_url && <span>{shot.voice_id} · 已配音</span>}</div>
             {shot.dialogue?.trim() && <label className="shot-speaker">说话角色<select value={shot.speaker_character_id || ""} onChange={async(event)=>{try{await updateShot(shot.id,{speakerCharacterId:event.target.value||null});setStatus(`镜头 ${shot.shot_number} 的说话角色已更新，请重新生成配音和口型`);}catch(error){setStatus(error instanceof Error?error.message:"保存说话角色失败");}}}><option value="">旁白 / 未指定</option>{characters.map((character)=><option key={character.id} value={character.id}>{character.name} · {character.voice_id}</option>)}</select></label>}
+            {shot.dialogue?.trim() && <div className="shot-templates"><b>情绪表演</b>{([['tender','温柔'],['nervous','紧张'],['angry','愤怒'],['grieving','悲伤'],['determined','坚定']] as const).map(([preset,label])=><button key={preset} disabled={batching} onClick={async()=>{try{const updated=await updateShot(shot.id,{performancePreset:preset});setShots((current)=>current.map((item)=>item.id===shot.id?updated:item));setStatus(`镜头 ${shot.shot_number} 已切换为${label}表演，请重新生成配音和口型`);}catch(error){setStatus(error instanceof Error?error.message:"保存情绪失败");}}}>{label}</button>)}</div>}
             <h3>{shot.scene}</h3><p><b>动作</b>{shot.action}</p>{shot.sound && <p><b>情绪/声音</b>{shot.sound}</p>}{shot.dialogue && <p><b>对白/字幕</b>{shot.dialogue}</p>}{shot.error_message && <p className="shot-error"><b>错误</b>{shot.error_message}</p>}
             {missingCharacterNames(shot).length > 0 && <div className="missing-characters"><b>缺少角色设定</b>{missingCharacterNames(shot).map((name) => <Link key={name} href={`/characters?name=${encodeURIComponent(name)}`}>创建 {name} →</Link>)}</div>}
             <div className="shot-templates"><b>镜头模板</b><button onClick={() => void applyShotTemplate(shot,"closeup","特写")}>特写</button><button onClick={() => void applyShotTemplate(shot,"near","近景")}>近景</button><button onClick={() => void applyShotTemplate(shot,"medium","中景")}>中景</button><button onClick={() => void applyShotTemplate(shot,"wide","远景")}>远景</button></div>

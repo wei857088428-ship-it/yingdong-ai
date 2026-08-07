@@ -6,6 +6,7 @@ function jobPath(userId: string, projectId: string, shotId: string) {
 
 export async function saveLipSyncJob(supabase: SupabaseClient, userId: string, projectId: string, shotId: string, jobId: string, mode: string) {
   const payload = new TextEncoder().encode(JSON.stringify({ version: 1, jobId, mode, createdAt: new Date().toISOString() }));
+  // storyboard-audio currently permits audio/mpeg only; the file extension identifies JSON metadata.
   const { error } = await supabase.storage.from("storyboard-audio").upload(jobPath(userId, projectId, shotId), payload, { contentType: "audio/mpeg", upsert: true });
   if (error) throw error;
 }
