@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage } from "@/app/lib/usage";
+import { archiveGeneratedVideo } from "@/app/lib/mediaArchive";
 
 type Provider = "xai" | "kling";
 
@@ -107,16 +108,18 @@ async function getXaiVideoStatus(requestId: string, userId: string) {
 
   const status = String(data?.status ?? "processing").toLowerCase();
 
-  const videoUrl =
+  let videoUrl =
     data?.video?.url ||
     data?.video_url ||
     data?.url ||
     data?.output?.video_url ||
     null;
 
-  const { data: work } = await supabase.from("works").select("id,conversation_id,usage_event_id,status").eq("provider_task_id", requestId).eq("user_id", userId).maybeSingle();
+  const { data: work } = await supabase.from("works").select("id,conversation_id,usage_event_id,status,url").eq("provider_task_id", requestId).eq("user_id", userId).maybeSingle();
   if (work && work.status === "processing" && status === "done" && videoUrl) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, true) : null;
+    try { videoUrl = await archiveGeneratedVideo(videoUrl, userId, "xai", requestId); }
+    catch (error) { console.error("Archive xAI video failed; using provider URL:", error); }
     await Promise.all([
       supabase.from("works").update({ status: "completed", url: videoUrl, updated_at: new Date().toISOString() }).eq("id", work.id),
       supabase.from("messages").insert({ conversation_id: work.conversation_id, user_id: userId, role: "assistant", content: "视频已经生成完成。", media_url: videoUrl, media_type: "video" }),
@@ -124,6 +127,7 @@ async function getXaiVideoStatus(requestId: string, userId: string) {
     ]);
     return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status, progress: data?.progress ?? null, videoUrl, credits });
   }
+  if (work?.status === "completed" && work.url) return NextResponse.json({ provider: "xai", requestId, taskId: requestId, status: "done", progress: 100, videoUrl: work.url });
   if (work && work.status === "processing" && ["failed", "expired"].includes(status)) {
     const credits = work.usage_event_id ? await finishUsage(userId, work.usage_event_id, false) : null;
     await supabase.from("works").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", work.id);
