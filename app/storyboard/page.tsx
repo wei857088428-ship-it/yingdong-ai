@@ -244,7 +244,7 @@ export default function StoryboardPage() {
     let elapsed = 0; let index = 1;
     const stamp = (ms: number) => { const h = Math.floor(ms / 3600000); const m = Math.floor(ms % 3600000 / 60000); const s = Math.floor(ms % 60000 / 1000); const x = ms % 1000; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(x).padStart(3,"0")}`; };
     const lines: string[] = [];
-    for (const shot of shots.toSorted((a,b) => a.shot_number-b.shot_number)) { const start = elapsed; const end = start + shot.duration_seconds * 1000; if (shot.dialogue?.trim()) { lines.push(`${index++}\n${stamp(start)} --> ${stamp(end)}\n${shot.dialogue.trim()}\n`); } elapsed = end; }
+    for (const shot of shots.toSorted((a,b) => a.shot_number-b.shot_number)) { const start = elapsed; const spokenMs = Math.max(0, Number(shot.subtitle_end_ms ?? 0) - Number(shot.subtitle_start_ms ?? 0)); const end = start + Math.min(shot.duration_seconds * 1000, spokenMs || shot.duration_seconds * 1000); if (shot.dialogue?.trim()) { lines.push(`${index++}\n${stamp(start)} --> ${stamp(end)}\n${shot.dialogue.trim()}\n`); } elapsed += shot.duration_seconds * 1000; }
     if (!lines.length) return setStatus("当前分镜没有可导出的对白字幕");
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `${currentTitle || "影动AI分镜"}.srt`; link.click(); URL.revokeObjectURL(url); setStatus("SRT 字幕已导出");
   }
