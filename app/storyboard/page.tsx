@@ -45,11 +45,11 @@ export default function StoryboardPage() {
   const missingCharacterNames = (shot: Shot) => (shot.character_names ?? []).filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
   const sceneKey = (value: string) => value.toLocaleLowerCase("zh-CN").split(/[，。；：,;:|｜]/)[0].replace(/[\s\-_]/g, "").slice(0, 24);
   const sameScene = (left: string, right: string) => { const a=sceneKey(left);const b=sceneKey(right);return Boolean(a&&b&&(a===b||a.includes(b)||b.includes(a))); };
-  const imageReferenceContext = (shot: Shot, previous?: Shot) => {
-    const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const };
+  const imageReferenceContext = (shot: Shot, previous?: Shot, styleImage?: string) => {
+    const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
     const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
     const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = !sharesCharacter && currentIds.length >= 3; const referenceImage = previous.image_url && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? previous.image_url : undefined;
-    return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const };
+    return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
 
   async function toggleShotCharacter(shot: Shot, id: string, checked: boolean) {
@@ -93,7 +93,8 @@ export default function StoryboardPage() {
     if (!window.confirm(`将生成 ${pending.length} 张图片，预计消耗 ${pending.length * 20} 积分。确定继续吗？`)) return;
     setBatching(true);
     let previousShot = shots.filter((shot) => shot.shot_number < pending[0].shot_number && shot.image_url).toSorted((a,b) => b.shot_number-a.shot_number)[0];
-    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); previousShot={...shot,image_url:data.imageUrl}; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
+    let styleImage = shots.filter((shot) => shot.image_url).toSorted((a,b) => a.shot_number-b.shot_number)[0]?.image_url;
+    for (let index = 0; index < pending.length; index++) { const shot = pending[index]; setStatus(`正在生成图片 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`); try { await updateShot(shot.id, { status: "image_generating", error: "" }); const context=imageReferenceContext(shot,previousShot,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;previousShot={...shot,image_url:data.imageUrl}; } catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); } }
     setBatching(false); setStatus("批量图片生成完成");
   }
 
@@ -243,11 +244,11 @@ export default function StoryboardPage() {
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
     const qualityNote = quality.warnings.length ? `\n\n制作检查 ${quality.score} 分，发现 ${quality.warnings.length} 项建议：\n${quality.warnings.slice(0, 4).join("\n")}` : "\n\n制作检查 100 分，未发现明显问题。";
     if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段视频、${voiceCount} 段配音与字幕、${lipSyncCount} 段口型同步；预计最多消耗 ${estimatedCredits} 积分和 HeyGen 约 $${estimatedHeyGen.toFixed(2)} 美元，已成功内容不会重复生成。${qualityNote}\n\n确定继续吗？`)) return;
-    setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;
+    setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;let styleImage=working.find((shot)=>shot.image_url)?.image_url;
     try {
       for (let index = 0; index < working.length; index++) {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/5 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
-        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=index>0?working[index-1]:undefined;const context=imageReferenceContext(shot,prior); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); working[index] = shot; }
+        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const prior=index>0?working[index-1]:undefined;const context=imageReferenceContext(shot,prior,styleImage); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", ...context, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); styleImage ||= data.imageUrl;working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
       for (let index = 0; index < working.length; index++) {
