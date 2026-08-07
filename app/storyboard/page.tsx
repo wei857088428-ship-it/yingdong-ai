@@ -190,15 +190,16 @@ export default function StoryboardPage() {
   async function generateFullEpisode(retryShotIds?: Set<string>) {
     if (batching || !shots.length) return;
     const targetShots = retryShotIds ? shots.filter((shot) => retryShotIds.has(shot.id)) : shots;
-    const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length;
+    const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length; const lipSyncCount = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).length;
     const estimatedCredits = imageCount * 20 + videoCount * 80 + voiceCount * 2;
-    if (!imageCount && !videoCount && !voiceCount) return setStatus("所选任务已经全部完成");
+    const estimatedHeyGen = targetShots.filter((shot) => shot.dialogue?.trim() && !isLipSynced(shot)).reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
+    if (!imageCount && !videoCount && !voiceCount && !lipSyncCount) return setStatus("所选任务已经全部完成");
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
-    if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段视频、${voiceCount} 段配音与字幕，预计最多消耗 ${estimatedCredits} 积分；已成功内容不会重复生成。确定继续吗？`)) return;
+    if (!window.confirm(`${actionName}将只处理未完成内容：${imageCount} 张图片、${videoCount} 段视频、${voiceCount} 段配音与字幕、${lipSyncCount} 段口型同步；预计最多消耗 ${estimatedCredits} 积分和 HeyGen 约 $${estimatedHeyGen.toFixed(2)} 美元，已成功内容不会重复生成。确定继续吗？`)) return;
     setBatching(true); const working = shots.map((shot) => ({ ...shot })); let failures = 0;
     try {
       for (let index = 0; index < working.length; index++) {
-        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/4 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+        let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/5 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
         try { await updateShot(shot.id, { status: "image_generating", error: "" }); const previousImage = index > 0 ? working[index - 1]?.image_url : undefined; const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterIds: effectiveCharacterIds(shot), referenceImage: previousImage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
@@ -206,24 +207,30 @@ export default function StoryboardPage() {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || !shot.image_url || shot.video_url) continue;
         try {
           if (shot.dialogue?.trim() && !shot.audio_url) {
-            setStatus(`整集制作 2/4 · 先生成配音并校准时长 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+            setStatus(`整集制作 2/5 · 先生成配音并校准时长 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
             const speaker = characters.find((character) => character.id === shot.speaker_character_id);
             const voiceResponse = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) });
             const voiceData = await voiceResponse.json(); if (!voiceResponse.ok) throw new Error(voiceData.error);
             shot = voiceData.shot as Shot; working[index] = shot; setShots((current) => current.map((item) => item.id === shot.id ? shot : item));
           }
-          setStatus(`整集制作 3/4 · 按配音时长生成视频 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
+          setStatus(`整集制作 3/5 · 按配音时长生成视频 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
           await updateShot(shot.id, { status: "video_generating", error: "" }); const response = await fetch("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "xai", prompt: shot.video_prompt, image: shot.image_url, duration: Math.min(15, shot.duration_seconds), aspectRatio: "9:16", resolution: "480p", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); let videoUrl = ""; for (let attempt = 0; attempt < 120; attempt++) { await new Promise((resolve) => setTimeout(resolve, 5000)); const check = await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`, { cache: "no-store" }); const detail = await check.json(); if (!check.ok) throw new Error(detail.error); if (detail.status === "done") { videoUrl = detail.videoUrl; break; } if (["failed", "expired"].includes(detail.status)) throw new Error("视频生成失败，积分已退还"); } if (!videoUrl) throw new Error("视频仍在处理中，请稍后重试"); shot = await updateShot(shot.id, { videoUrl, status: "completed", error: "" }); working[index] = shot;
         }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "视频生成失败" }); }
       }
       const voiceShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.dialogue?.trim() && !shot.audio_url);
       for (let index = 0; index < voiceShots.length; index++) {
-        const shot = voiceShots[index]; setStatus(`整集制作 4/4 · 补充配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
-        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
+        const shot = voiceShots[index]; setStatus(`整集制作 4/5 · 补充配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
+        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || shot.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || shot.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); const workingIndex = working.findIndex((item) => item.id === shot.id); if (workingIndex >= 0) working[workingIndex] = data.shot; setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "配音生成失败" }); }
       }
-      setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、匹配时长的视频和字幕时间轴全部完成");
+      const lipSyncShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.video_url && shot.audio_url && shot.dialogue?.trim() && !isLipSynced(shot));
+      for (let index = 0; index < lipSyncShots.length; index++) {
+        const shot = lipSyncShots[index]; setStatus(`整集制作 5/5 · 同步声音与口型 ${index + 1}/${lipSyncShots.length} · 镜头 ${shot.shot_number}`);
+        try { await lipSyncOne(shot); }
+        catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "口型同步失败" }); }
+      }
+      setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、视频、字幕和口型同步全部完成，可直接预览或导出");
     } finally { setBatching(false); }
   }
 
