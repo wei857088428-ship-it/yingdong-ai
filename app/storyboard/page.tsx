@@ -97,17 +97,23 @@ export default function StoryboardPage() {
     catch (error) { setStatus(error instanceof Error ? error.message : "应用镜头模板失败"); }
   }
 
-  async function continueProject() {
+  async function continueProject(count = 1) {
     if (!currentProjectId || loading) return;
-    if (!window.confirm("AI 将读取本集剧情和结尾，生成下一集完整分镜，预计消耗 1 积分。确定继续吗？")) return;
-    setLoading(true); setStatus("AI 编剧正在承接本集结尾，创作下一集…");
+    const episodeCount=Math.min(3,Math.max(1,count));
+    if (!window.confirm(`AI 将按顺序生成 ${episodeCount} 集完整分镜，预计消耗 ${episodeCount} 积分。每一集都会继承前面剧情；中途失败时已成功生成的集数仍会保留。确定继续吗？`)) return;
+    setLoading(true);let completed=0;let parentProjectId=currentProjectId;
     try {
-      const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ continueFromProjectId: currentProjectId, shotCount: Number(shotCount) }) });
-      const data = await response.json(); if (!response.ok) throw new Error(data.error);
-      setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(data.project.character_id || ""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
-      setStatus(`下一集已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`);
-      window.history.replaceState(null, "", `/storyboard?project=${data.project.id}`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : "续写下一集失败"); }
+      let remainingCredits:number|undefined;
+      for(let episodeIndex=0;episodeIndex<episodeCount;episodeIndex++){
+        setStatus(`AI 编剧正在连续创作 ${episodeIndex+1}/${episodeCount}，并核对系列历史账本…`);
+        const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ continueFromProjectId: parentProjectId, shotCount: Number(shotCount) }) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error);
+        parentProjectId=data.project.id;remainingCredits=data.credits;completed++;
+        setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(data.project.character_id || ""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
+        window.history.replaceState(null, "", `/storyboard?project=${data.project.id}`);
+      }
+      setStatus(`已连续生成 ${completed} 集，当前最后一集已打开${remainingCredits===undefined?"":`，剩余 ${remainingCredits} 积分`}`);
+    } catch (error) { const message=error instanceof Error?error.message:"续写下一集失败";setStatus(completed?`已成功生成 ${completed} 集；后续生成停止：${message}`:message); }
     finally { setLoading(false); }
   }
 
@@ -415,7 +421,7 @@ export default function StoryboardPage() {
             <button disabled={batching} onClick={() => void batchLipSync()}>批量同步口型 · {shots.filter((shot) => shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot)).length} 镜</button>
             <button disabled={batching} onClick={exportSrt}>导出 SRT 字幕</button>
           </div>
-          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "续写中…" : "AI 续写下一集"}</button>}{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
+          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "续写中…" : "AI 续写下一集"}</button>}{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject(3)}>连续生成 3 集</button>}{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
           <div className="shot-list">{shots.map((shot) => <article key={shot.shot_number}>
             {shot.image_url && <Image className="shot-preview" src={shot.image_url} alt={`镜头${shot.shot_number}`} width={600} height={1067} unoptimized/>}
             {shot.video_url && <video className="shot-preview" src={shot.video_url} controls playsInline/>}
