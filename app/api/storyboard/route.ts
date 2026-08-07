@@ -95,7 +95,31 @@ export async function POST(request: Request) {
     story = `制作质量硬性要求：先明确主角当前目标，再让危险阻碍目标，角色必须作出选择，下一镜展示该选择的直接后果；禁止用巧合推进，禁止无铺垫加入新人物、能力或线索。每镜只完成一个主要动作，动作必须能在该镜时长内演完。对白必须口语化、带潜台词和明确情绪，不能解释画面已经展示的信息；每秒约4个汉字，台词长度必须匹配镜头时长，并给动作和呼吸留时间。视频提示词要求自然连续动作、稳定人体、克制运镜，禁止瞬移、变脸、换装、额外肢体和无原因跳切。\n\n原始剧情：\n${story}`;
     const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.35, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "storyboard", strict: true, schema: storyboardSchema(shotCount) } }, messages: [{ role: "system", content: `你是专业竖屏漫剧导演。把用户故事拆成${shotCount}个连续、可直接制作的镜头。每个镜头必须承接上一镜的动作结果，禁止无解释地跳时间、换地点或增加新事件；保持角色、服装、场景与时间连续。${shotCount <= 3 ? "这是质量样片：第1镜必须交代人物目标和危险起因，第2镜让人物作出明确选择并升级冲突，第3镜展示选择造成的直接后果并留下悬念；三镜都必须有自然、推动剧情的对白或旁白，不能只写动作。" : "开头3秒有钩子，中段因果清楚，结尾有悬念。"} image_prompt 必须包含9:16画幅、角色、景别、构图和光线，并禁止文字水印；video_prompt 必须写清动作与运镜。sound 必须写明环境声、动作音效和情绪氛围。当前用户角色库：${characterCatalog}。每个镜头的 character_names 填写画面中确实出现的剧情角色姓名，不要填写版本号、群演或泛称。已有角色必须使用角色库中的准确名称；剧情需要但角色库没有的人物也要保留原姓名，供用户补建角色。没有具名角色时返回空数组。每个镜头的 dialogue 只能由一个角色说话，严禁在同一 dialogue 中写两人对话或用“角色名：”串联台词；需要换人说话时必须放到下一镜。speaker_name 必须填写该唯一说话角色的准确姓名；旁白、无人说话或无法确定时填空字符串。` }, { role: "user", content: story }] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "分镜生成失败");
-    const parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
+    let parsed = parseJson(result?.choices?.[0]?.message?.content ?? "");
+    try {
+      const reviewResponse = await fetch("https://api.x.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          model: "grok-4.5",
+          temperature: 0.2,
+          max_tokens: 12000,
+          response_format: { type: "json_schema", json_schema: { name: "reviewed_storyboard", strict: true, schema: storyboardSchema(shotCount) } },
+          messages: [
+            { role: "system", content: `你是漫剧总编剧和连续性审校。审核并重写这份${shotCount}镜分镜，但必须保留原故事核心事实、角色姓名和最终悬念。逐镜检查：上一镜的动作必须在下一镜产生直接后果；人物必须先有动机再做选择；换地点、时间或人物必须在画面中明确交代；道具、伤势、服装、光线和人物位置保持连续；每镜只允许一个主要动作；对白必须像真人说话、带情绪和潜台词，并且 speaker_name 与唯一说话人一致。删除重复信息、无铺垫巧合、突然出现的能力或线索。输出修正后的完整分镜，不要写审校说明。` },
+            { role: "user", content: `原始创作要求：\n${story}\n\n待审校分镜：\n${JSON.stringify(parsed)}` },
+          ],
+        }),
+      });
+      const reviewedResult = await reviewResponse.json();
+      if (reviewResponse.ok) {
+        const reviewed = parseJson(reviewedResult?.choices?.[0]?.message?.content ?? "");
+        if (reviewed.shots?.length === shotCount) parsed = reviewed;
+      }
+    } catch {
+      // Keep the first valid draft if the optional continuity review is unavailable.
+    }
     const shots = (parsed.shots ?? []).slice(0, shotCount).map((shot, index) => {
       const characterNames = cleanCharacterNames(Array.isArray(shot.character_names) ? shot.character_names : []);
       const dialogue = String(shot.dialogue ?? "");
