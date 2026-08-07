@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -16,6 +16,7 @@ export default function StoryboardPage() {
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
   const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
+  const autoResumeRef = useRef(new Set<string>());
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
     if (!data.user) { router.replace("/login"); return; }
@@ -33,6 +34,26 @@ export default function StoryboardPage() {
     if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); setCharacterId(selected.character_id || ""); }
     setCharacters(((characterResult.data ?? []) as Character[]).map((character) => ({ ...character, voice_id: normalizeVoiceId(character.voice_id) })));
   }); }, [router]);
+
+  useEffect(() => {
+    if (batching) return;
+    const interrupted = shots.filter((shot) => shot.media_status === "lipsync_generating" && !autoResumeRef.current.has(shot.id));
+    if (!interrupted.length) return;
+    interrupted.forEach((shot) => autoResumeRef.current.add(shot.id));
+    void (async () => {
+      setBatching(true);
+      try {
+        for (let index = 0; index < interrupted.length; index++) {
+          const shot = interrupted[index]; setStatus(`正在自动恢复口型任务 ${index + 1}/${interrupted.length} · 镜头 ${shot.shot_number}`);
+          try { await lipSyncOne(shot); }
+          catch (error) { await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "恢复口型任务失败" }); }
+        }
+        setStatus("中断的口型任务已恢复完成");
+      } finally { setBatching(false); }
+    })();
+  // lipSyncOne is intentionally omitted: the ref makes each persisted job resume once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shots, batching]);
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
