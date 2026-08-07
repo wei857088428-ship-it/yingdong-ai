@@ -10,6 +10,7 @@ import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
 import { continuityReferenceImage } from "@/app/lib/storyboardReferences";
 import { storyTemplates, type StoryTemplate } from "@/app/lib/storyTemplates";
 import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storyboardCharacterLimit";
+import { lipSyncPollDecision } from "@/app/lib/lipsyncPolling";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -290,13 +291,19 @@ export default function StoryboardPage() {
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
       jobId = String(created.jobId || "");
     }
+    let consecutivePollFailures = 0;
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
       const query = jobId ? `?jobId=${encodeURIComponent(jobId)}` : "";
-      const check = await fetch(`/api/storyboard/shots/${shot.id}/lipsync${query}`, { cache: "no-store" });
-      const detail = await check.json(); if (!check.ok) throw new Error(detail.error || "查询口型同步任务失败");
-      if (detail.status === "completed") { const completedShot=detail.shot as Shot;setShots((current) => current.map((item) => item.id === shot.id ? completedShot : item)); return completedShot; }
-      if (detail.status === "failed") throw new Error(detail.error || "口型同步失败");
+      let check: Response;let detail:{status?:string;error?:string;shot?:Shot};
+      try { check=await fetch(`/api/storyboard/shots/${shot.id}/lipsync${query}`,{cache:"no-store"});detail=await check.json(); }
+      catch { consecutivePollFailures++;if(lipSyncPollDecision(0,"",consecutivePollFailures)==="retry"){setStatus(`镜头 ${shot.shot_number} 的口型任务仍在运行，网络短暂中断，正在自动重连 ${consecutivePollFailures}/6…`);continue;}throw new Error("连续多次无法连接口型任务，请稍后刷新页面，系统会自动恢复"); }
+      const decision=lipSyncPollDecision(check.status,detail.status??"",check.ok?0:++consecutivePollFailures);
+      if(decision==="retry"){setStatus(`镜头 ${shot.shot_number} 的口型任务仍在运行，服务暂时繁忙，正在自动重试 ${consecutivePollFailures}/6…`);continue;}
+      if(decision==="error")throw new Error(detail.error||`查询口型同步任务失败（${check.status}）`);
+      consecutivePollFailures=0;
+      if(decision==="completed") { const completedShot=detail.shot as Shot;setShots((current) => current.map((item) => item.id === shot.id ? completedShot : item)); return completedShot; }
+      if(decision==="failed") throw new Error(detail.error || "口型同步失败");
     }
     throw new Error("口型同步仍在处理中，请稍后再试");
   }
