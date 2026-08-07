@@ -189,6 +189,7 @@ export default function StoryboardPage() {
           return causalLink.length >= 10 && continuityState.length >= 20;
         });
         if (!contractComplete) critical.push(`${label} 缺少完整因果链或镜头结束状态，需先执行 AI 修复对白与连续性`);
+        if (shot.dialogue?.trim() && shot.speaker_character_id && !/\[口型同步准备\]/.test(shot.video_prompt)) critical.push(`${label} 缺少说话人脸部与闭嘴约束，需先执行 AI 修复对白与连续性`);
       }
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
       const spoken = Array.from((shot.dialogue || "").replace(/[\s，。！？、…,.!?]/g, "")).length;

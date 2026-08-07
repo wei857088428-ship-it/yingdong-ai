@@ -65,8 +65,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const cleanImagePrompt = removeContracts(String(current.image_prompt ?? ""));
       const cleanVideoPrompt = removeContracts(String(current.video_prompt ?? ""));
       const contracts = `\n[CAUSAL LINK]\n${causalLink}\n[CONTINUITY STATE]\n${state}`;
-      const imagePrompt = withContinuityPrompt(`${cleanImagePrompt}${contracts}`, currentState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "image");
-      const videoPrompt = withContinuityPrompt(`${cleanVideoPrompt}${contracts}`, currentState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "video");
+      const performanceState = { ...currentState, dialogue: String(item.dialogue ?? "").trim(), speaker_name: speakerName || speaker?.name || "" };
+      const imagePrompt = withContinuityPrompt(`${cleanImagePrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "image");
+      const videoPrompt = withContinuityPrompt(`${cleanVideoPrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "video");
       if (imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt) upgradedPrompts++;
       const suggestedDuration = Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds)));
       const durationSeconds = current.audio_url || current.video_url ? Number(current.duration_seconds) : suggestedDuration;
