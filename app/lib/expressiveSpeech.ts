@@ -15,8 +15,16 @@ export function expressiveSpeech(dialogue: string, performanceContext: string) {
   const suspicious = /怀疑|试探|警惕|不确定|疑惑|追问/.test(performanceContext);
   const sarcastic = /讽刺|嘲讽|嘲笑|戏谑|阴阳怪气|挑衅/.test(performanceContext);
   const pleading = /恳求|哀求|祈求|求你|请求|乞求/.test(performanceContext);
+  const nervous = /紧张|焦虑|不安|心虚|忐忑|慌张/.test(performanceContext);
+  const tender = /温柔|安慰|关切|心疼|深情|宠溺|柔和/.test(performanceContext);
+  const excited = /激动|热血|振奋|亢奋|迫不及待/.test(performanceContext);
+  const remorseful = /愧疚|后悔|自责|歉意|悔恨/.test(performanceContext);
+  const disgusted = /厌恶|嫌弃|鄙夷|不屑|反感/.test(performanceContext);
+  const playful = /俏皮|调皮|打趣|逗弄|撒娇/.test(performanceContext);
   const urgent = /急促|大喊|冲向|警告|追赶|崩溃|警戒|紧绷|保护|危险/.test(performanceContext) || /！|!/.test(dialogue);
   const deliberatePause = /停顿|迟疑|犹豫|欲言又止|沉默片刻/.test(performanceContext);
+  const instructedSoft = /音量[^；。]*(?:低|轻|小|压低)|轻声|低声|柔声/.test(performanceContext);
+  const instructedLoud = /音量[^；。]*(?:高|大|响)|提高音量|大声/.test(performanceContext);
 
   let paced = dialogue.trim().replace(/……|…+/g, (value) => `${value} [long-pause] `);
   if (deliberatePause && !paced.includes("[pause]")) paced = paced.replace(/([，,；;])/, "$1 [pause] ");
@@ -24,7 +32,7 @@ export function expressiveSpeech(dialogue: string, performanceContext: string) {
   let text = paced;
   if (whispering) text = `<whisper><soft>${paced}</soft></whisper>`;
   else if (weak) text = `[breath] <slow><soft>${paced}</soft></slow>`;
-  else if (angry && intensity >= 4) text = `<build-intensity><loud>${paced}</loud></build-intensity>`;
+  else if (angry && intensity >= 4) text = instructedSoft ? `<soft><build-intensity>${paced}</build-intensity></soft>` : `<build-intensity><loud>${paced}</loud></build-intensity>`;
   else if (angry) text = `<emphasis>${paced}</emphasis>`;
   else if (grieving) text = `[sigh] <slow><soft>${paced}</soft></slow>${crying ? " [cry]" : ""}`;
   else if (frightened) text = `[inhale] <higher-pitch>${paced}</higher-pitch>${intensity >= 4 ? " [breath]" : ""}`;
@@ -34,14 +42,24 @@ export function expressiveSpeech(dialogue: string, performanceContext: string) {
   else if (shocked) text = `[inhale] <higher-pitch><emphasis>${paced}</emphasis></higher-pitch>`;
   else if (pleading) text = `<soft><build-intensity>${paced}</build-intensity></soft>`;
   else if (sarcastic) text = `<lower-pitch><emphasis>${paced}</emphasis></lower-pitch>`;
-  else if (urgent && intensity >= 4) text = `<build-intensity>${paced}</build-intensity>`;
-  else if (urgent) text = `<emphasis>${paced}</emphasis>`;
   else if (determined) text = `<lower-pitch><emphasis>${paced}</emphasis></lower-pitch>`;
   else if (restrained) text = `<decrease-intensity><slow>${paced}</slow></decrease-intensity>`;
   else if (suspicious) text = `<slow><soft>${paced}</soft></slow>`;
+  else if (remorseful) text = `[sigh] <slow><soft>${paced}</soft></slow>`;
+  else if (nervous) text = `[inhale] <soft><higher-pitch>${paced}</higher-pitch></soft>`;
+  else if (tender) text = `<soft>${paced}</soft>`;
+  else if (excited) text = `<build-intensity><higher-pitch>${paced}</higher-pitch></build-intensity>`;
+  else if (disgusted) text = `<lower-pitch><emphasis>${paced}</emphasis></lower-pitch>`;
+  else if (playful) text = `<higher-pitch><laugh-speak>${paced}</laugh-speak></higher-pitch>`;
+  else if (urgent && intensity >= 4) text = `<build-intensity>${paced}</build-intensity>`;
+  else if (urgent) text = `<emphasis>${paced}</emphasis>`;
 
   const instructedSlow = /语速[^；。]*(?:慢|缓)|缓慢|慢慢/.test(performanceContext);
   const instructedFast = /语速[^；。]*(?:快|急)|快速|急促/.test(performanceContext);
-  const naturalSpeed = instructedSlow ? 0.9 : instructedFast ? 1.08 : grieving || weak ? 0.9 : restrained ? 0.91 : whispering || suspicious ? 0.94 : pleading ? 0.96 : shocked ? 1.03 : angry || urgent ? 1 + intensity * 0.012 : 0.98;
+  if (instructedSoft && !/<(?:soft|whisper)>/.test(text)) text = `<soft>${text}</soft>`;
+  else if (instructedLoud && !/<(?:loud|soft|whisper)>/.test(text)) text = `<loud>${text}</loud>`;
+  if (instructedSlow && !/<slow>/.test(text)) text = `<slow>${text}</slow>`;
+  else if (instructedFast && !/<(?:fast|slow)>/.test(text)) text = `<fast>${text}</fast>`;
+  const naturalSpeed = instructedSlow ? 0.9 : instructedFast ? 1.08 : grieving || weak || remorseful ? 0.9 : restrained ? 0.91 : whispering || suspicious || tender ? 0.94 : pleading || nervous ? 0.96 : shocked ? 1.03 : excited ? 1.07 : playful ? 1.04 : angry || urgent ? 1 + intensity * 0.012 : 0.98;
   return { text, speed: Math.min(1.2, Math.max(0.78, naturalSpeed)) };
 }
