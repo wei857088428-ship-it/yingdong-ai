@@ -157,12 +157,12 @@ export default function StoryboardPage() {
     throw new Error("口型同步仍在处理中，请稍后再试");
   }
 
-  async function batchLipSync(singleShot?: Shot) {
+  async function batchLipSync(onlyShot?: Shot) {
     if (batching) return;
-    const pending = (singleShot ? [singleShot] : shots).filter((shot) => shot.video_url && shot.audio_url && shot.dialogue?.trim() && shot.media_status !== "lipsync_ready");
+    const pending = (onlyShot ? [onlyShot] : shots).filter((shot) => shot.video_url && shot.audio_url && shot.dialogue?.trim() && shot.media_status !== "lipsync_ready");
     if (!pending.length) return setStatus("没有等待口型同步的镜头，请先生成视频和配音");
     const estimate = pending.reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
-    if (!window.confirm(`将同步 ${pending.length} 个镜头的声音和口型，预计消耗 HeyGen 约 $${estimate.toFixed(2)} 美元。特写/近景使用高精度，其余使用快速模式。确定继续吗？`)) return;
+    if (!onlyShot && !window.confirm(`将同步 ${pending.length} 个镜头的声音和口型，预计消耗 HeyGen 约 $${estimate.toFixed(2)} 美元。特写/近景使用高精度，其余使用快速模式。确定继续吗？`)) return;
     setBatching(true); let failures = 0; let lastFailure = "";
     try {
       for (let index = 0; index < pending.length; index++) {
