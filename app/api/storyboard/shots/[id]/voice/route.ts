@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
+import { expressiveSpeech } from "@/app/lib/expressiveSpeech";
 
 const voices = new Set(["ara", "eve", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris", "altair", "zenith", "perseus", "helios", "lux", "kepler"]);
 const languages = new Set(["zh", "en", "ja", "auto"]);
@@ -37,26 +38,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const performanceContext = `${String(shot.action ?? "")} ${String(shot.sound ?? "")} ${(shot.character_names ?? []).join(" ")}`;
     const likelyFemale = /苏雨晴|女孩|少女|女人|女性|女主|她/.test(performanceContext) && !shot.speaker_character_id;
     const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : likelyFemale ? "eve" : voices.has(body.fallbackVoiceId ?? "") ? body.fallbackVoiceId! : "rex";
-    const whispering = /微弱|虚弱|低声|耳语|气若游丝|屏息/.test(performanceContext);
-    const urgent = /惊恐|恐惧|急促|大喊|冲向|警告|追赶|崩溃|警戒|紧绷|保护|危险|怪物|丧尸/.test(performanceContext) || /！|!/.test(text);
-    const grieving = /哭|哽咽|悲伤|失去|绝望/.test(performanceContext);
-    const angry = /愤怒|暴怒|咆哮|怒吼|质问|仇恨/.test(performanceContext);
-    const intensity = Math.min(5, Math.max(1, Number(performanceContext.match(/(?:强度|intensity)\s*[:：]?\s*([1-5])/i)?.[1] ?? 2)));
-    const naturalSpeed = grieving ? 0.88 : whispering ? 0.92 : angry ? 1 + intensity * 0.012 : urgent ? 1 + intensity * 0.016 : 0.98;
-    const speed = Math.min(1.3, Math.max(0.7, Number(body.speed ?? naturalSpeed)));
-    const frightened = /惊恐|恐惧|害怕|颤抖|危险|怪物|丧尸/.test(performanceContext);
-    const relieved = /松了口气|如释重负|终于安全|得救/.test(performanceContext);
-    const laughing = /笑|大笑|轻笑|开心|兴奋/.test(performanceContext);
-    const punctuatedText = urgent ? text.replace(/[。.]$/u, "！") : grieving ? text.replace(/，/g, "……") : text;
-    let expressiveText = punctuatedText;
-    if (whispering) expressiveText = `<whisper><soft>${expressiveText}</soft></whisper>`;
-    else if (angry) expressiveText = `<build-intensity><loud>${expressiveText}</loud></build-intensity>`;
-    else if (grieving) expressiveText = `[sigh] <slow><soft>${expressiveText}</soft></slow> [cry]`;
-    else if (frightened) expressiveText = `[inhale] <higher-pitch>${expressiveText}</higher-pitch> [breath]`;
-    else if (relieved) expressiveText = `[exhale] <soft>${expressiveText}</soft>`;
-    else if (laughing) expressiveText = `[chuckle] <laugh-speak>${expressiveText}</laugh-speak>`;
-    else if (/……|…/.test(expressiveText)) expressiveText = expressiveText.replace(/……|…/g, " [long-pause] ");
-    if (intensity >= 4 && !whispering && !grieving) expressiveText = `<build-intensity>${expressiveText}</build-intensity>`;
+    const performance = expressiveSpeech(text, performanceContext);
+    const expressiveText = performance.text;
+    const speed = Math.min(1.3, Math.max(0.7, Number(body.speed ?? performance.speed)));
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/tts", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
