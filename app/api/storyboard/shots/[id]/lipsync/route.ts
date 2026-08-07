@@ -41,8 +41,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const encoded = body.paddedAudioBase64.replace(/^data:audio\/wav;base64,/, "");
     const audio = Buffer.from(encoded, "base64");
     if (!audio.length || audio.length > 12_000_000) return NextResponse.json({ error: "口型同步音频无效或过大" }, { status: 400 });
-    const path = `${user.id}/${shot.project_id}/${shot.id}.lipsync.wav`;
-    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/wav", upsert: true });
+    // The existing storyboard-audio bucket is configured for MPEG audio. Keep
+    // the .wav filename so HeyGen can detect the actual PCM container, while
+    // using the bucket-compatible content type. A unique name also avoids the
+    // storage update policy and stale CDN copies from previous attempts.
+    const path = `${user.id}/${shot.project_id}/${shot.id}.${Date.now()}.lipsync.wav`;
+    const { error: uploadError } = await supabase.storage.from("storyboard-audio").upload(path, audio, { contentType: "audio/mpeg", upsert: false });
     if (uploadError) return NextResponse.json({ error: uploadError.message }, { status: 500 });
     audioUrl = supabase.storage.from("storyboard-audio").getPublicUrl(path).data.publicUrl;
   }
