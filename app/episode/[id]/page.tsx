@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/app/lib/supabase";
 import { episodeAudioPlan } from "@/app/lib/episodeAudioPlan";
 
-type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; image_url?:string; video_url?:string; source_video_url?:string|null; audio_url?:string; voice_id?:string; media_status?:string; speaker_character_id?:string|null; subtitle_start_ms?:number; subtitle_end_ms?:number };
+type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; sound?:string; image_url?:string; video_url?:string; source_video_url?:string|null; audio_url?:string; voice_id?:string; media_status?:string; speaker_character_id?:string|null; subtitle_start_ms?:number; subtitle_end_ms?:number };
 type Project = { id:string; title:string; created_at:string; storyboard_shots:Shot[] };
 type CaptionCue = { text:string; start:number; end:number };
 
@@ -65,6 +65,7 @@ export default function EpisodePage() {
     const unsyncedVoices=shots.filter((item)=>requiresLipSync(item)&&(!item.video_url||!hasEmbeddedVoice(item)));if(unsyncedVoices.length)return setExportStatus(`还有 ${unsyncedVoices.length} 个角色对白镜头没有完成说话视频和口型同步，已暂停导出`);
     setExporting(true);setExportProgress(0);setExportStatus("正在加载本地视频渲染器…");let renderer:{terminate:()=>void}|null=null;
     try { const [{FFmpeg},{fetchFile,toBlobURL}]=await Promise.all([import("@ffmpeg/ffmpeg"),import("@ffmpeg/util")]); const ffmpeg=new FFmpeg();renderer=ffmpeg; ffmpeg.on("progress",({progress})=>setExportProgress(Math.max(1,Math.min(99,Math.round(progress*100))))); await ffmpeg.load({coreURL:await toBlobURL("/render-engine/engine","text/javascript"),wasmURL:await toBlobURL("/render-engine/data","application/wasm")}); const segmentNames:string[]=[];
+      let music:Uint8Array|null=null;let musicName="";let musicApplied=false;try{const query=`cinematic background music for a vertical drama, matching these moods and environments: ${shots.map((item)=>item.sound).filter(Boolean).join("; ").slice(0,520)}`;const response=await fetch(`/api/storyboard/sounds?type=music&query=${encodeURIComponent(query)}`,{cache:"no-store"});if(response.ok){music=new Uint8Array(await response.arrayBuffer());musicName=decodeURIComponent(response.headers.get("x-sound-name")||"自动匹配配乐");}}catch{/* Music is optional; dialogue export remains available. */}
       const fetchWithRetry=async(url:string,label:string)=>{let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{const response=await fetch(url,{cache:"no-store"});if(!response.ok)throw new Error(`${label} 读取失败（${response.status}）`);return new Uint8Array(await response.arrayBuffer());}catch(error){failure=error;if(attempt<3){setExportStatus(`${label} 读取失败，正在重试 ${attempt}/2…`);await new Promise((resolve)=>setTimeout(resolve,700*attempt));}}}throw failure instanceof Error?failure:new Error(`${label} 读取失败`);};
       for(let i=0;i<shots.length;i++){
         const item=shots[i];const duration=String(Math.max(2,mediaDurations[item.id]??item.duration_seconds));const fadeOut=Math.max(0,Number(duration)-0.12).toFixed(3);const captionDuration=subtitleDuration(item).toFixed(3);const firstShot=i===0;const lastShot=i===shots.length-1;const videoFades=`${firstShot?",fade=t=in:st=0:d=.12":""}${lastShot?`,fade=t=out:st=${fadeOut}:d=.12`:""}`;const audioFades=`,afade=t=in:st=0:d=.04,afade=t=out:st=${fadeOut}:d=.08`;
@@ -88,10 +89,11 @@ export default function EpisodePage() {
         for(const temporary of [sourceName,...(reliableVoice?[audioName]:[]),...(sourceAmbience?[ambientName]:[]),...subtitleNames])await ffmpeg.deleteFile(temporary).catch(()=>undefined);
       }
       await ffmpeg.writeFile("segments.txt",segmentNames.map((name)=>`file '${name}'`).join("\n"));setExportStatus("正在合并整集并封装 MP4…");setExportProgress(95);
-      const concatExit=await ffmpeg.exec(["-f","concat","-safe","0","-i","segments.txt","-c","copy","-movflags","+faststart","episode.mp4"]);if(concatExit!==0)throw new Error("整集镜头合并失败");
-      const output=await ffmpeg.readFile("episode.mp4");if(typeof output==="string"||output.byteLength<1024)throw new Error("视频编码结果为空或异常");
-      for(const name of [...segmentNames,"segments.txt","episode.mp4"])await ffmpeg.deleteFile(name).catch(()=>undefined);
-      const url=URL.createObjectURL(new Blob([output as Uint8Array<ArrayBuffer>],{type:"video/mp4"}));const link=document.createElement("a");link.href=url;link.download=`${project.title}-影动AI.mp4`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),30000);setExportProgress(100);setExportStatus("整集 MP4 已导出到下载文件夹");
+      const concatExit=await ffmpeg.exec(["-f","concat","-safe","0","-i","segments.txt","-c","copy","-movflags","+faststart","episode-raw.mp4"]);if(concatExit!==0)throw new Error("整集镜头合并失败");let outputName="episode-raw.mp4";
+      if(music?.byteLength){setExportStatus(`正在混入背景音乐：${musicName}`);await ffmpeg.writeFile("music.wav",music);const musicFadeOut=Math.max(0,total-1).toFixed(3);const mixExit=await ffmpeg.exec(["-stream_loop","-1","-i","music.wav","-i","episode-raw.mp4","-filter_complex",`[0:a]volume=.08,afade=t=in:st=0:d=.8,afade=t=out:st=${musicFadeOut}:d=1[music];[1:a][music]amix=inputs=2:duration=first:dropout_transition=2[a]`,"-map","1:v","-map","[a]","-c:v","copy","-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart","episode.mp4"]);if(mixExit===0){outputName="episode.mp4";musicApplied=true;}else await ffmpeg.deleteFile("episode.mp4").catch(()=>undefined);}
+      const output=await ffmpeg.readFile(outputName);if(typeof output==="string"||output.byteLength<1024)throw new Error("视频编码结果为空或异常");
+      for(const name of [...segmentNames,"segments.txt","episode-raw.mp4","episode.mp4","music.wav"])await ffmpeg.deleteFile(name).catch(()=>undefined);
+      const url=URL.createObjectURL(new Blob([output as Uint8Array<ArrayBuffer>],{type:"video/mp4"}));const link=document.createElement("a");link.href=url;link.download=`${project.title}-影动AI.mp4`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),30000);setExportProgress(100);setExportStatus(musicApplied?`整集 MP4 已导出，已自动混入：${musicName}`:"整集 MP4 已导出到下载文件夹");
     }catch(reason){setExportStatus(reason instanceof Error?`导出失败：${reason.message}`:"整集导出失败，请重试");}finally{renderer?.terminate();setExporting(false);}}
 
   if(error)return <main className="episode-page"><div className="episode-empty">{error}<Link href={`/storyboard?project=${params.id}`}>返回分镜</Link></div></main>;
