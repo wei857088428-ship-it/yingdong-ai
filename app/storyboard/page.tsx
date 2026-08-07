@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/lib/supabase";
 import { characterVoiceOptions, normalizeVoiceId } from "@/app/lib/voiceCatalog";
+import { normalizeDramaticFunction } from "@/app/lib/dramaticProgression";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -178,17 +179,20 @@ export default function StoryboardPage() {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
-    const critical: string[] = []; const warnings: string[] = [];
+    const critical: string[] = []; const warnings: string[] = []; const seenDramaticFunctions = new Map<string,number>();
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
       if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
       if (includeVisual && shot.image_prompt?.trim() && shot.video_prompt?.trim()) {
         const contractComplete = [shot.image_prompt, shot.video_prompt].every((prompt) => {
+          const dramaticFunction = prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
           const causalLink = prompt.match(/\[CAUSAL LINK\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
           const continuityState = prompt.match(/\[CONTINUITY STATE\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
-          return causalLink.length >= 10 && continuityState.length >= 20;
+          return dramaticFunction.length >= 15 && causalLink.length >= 10 && continuityState.length >= 20;
         });
-        if (!contractComplete) critical.push(`${label} 缺少完整因果链或镜头结束状态，需先执行 AI 修复对白与连续性`);
+        if (!contractComplete) critical.push(`${label} 缺少剧情推进、因果链或镜头结束状态，需先执行 AI 修复对白与连续性`);
+        const dramaticFunction=shot.video_prompt.match(/\[DRAMATIC FUNCTION\]\s*\n?([^\n]+)/i)?.[1]?.trim()??"";const normalizedFunction=normalizeDramaticFunction(dramaticFunction);
+        if(normalizedFunction){const duplicate=seenDramaticFunctions.get(normalizedFunction);if(duplicate)critical.push(`${label} 与镜头 ${duplicate} 的剧情功能完全重复，需先执行 AI 修复`);else seenDramaticFunctions.set(normalizedFunction,shot.shot_number);}
         if (shot.dialogue?.trim() && shot.speaker_character_id && !/\[口型同步准备\]/.test(shot.video_prompt)) critical.push(`${label} 缺少说话人脸部与闭嘴约束，需先执行 AI 修复对白与连续性`);
       }
       if (!Number.isFinite(shot.duration_seconds) || shot.duration_seconds < 2 || shot.duration_seconds > 15) critical.push(`${label} 时长不在 2-15 秒范围`);
