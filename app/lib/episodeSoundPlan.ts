@@ -19,13 +19,19 @@ function cleanSound(value?: string) {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
 }
 
+export function soundDescription(value?: string) {
+  const raw = cleanSound(value);
+  const labelled = raw.match(/(?:声音|环境声|动作音效|sound(?: effects?)?)\s*[:：]\s*([\s\S]*)$/i)?.[1];
+  return cleanSound(labelled ?? raw);
+}
+
 export function episodeSoundCues(shots: EpisodeSoundShot[], limit = 6): EpisodeSoundCue[] {
   let cursor = 0;
   const seen = new Set<string>();
   const candidates: Array<EpisodeSoundCue & { score: number }> = [];
 
   shots.forEach((shot, shotIndex) => {
-    const sound = cleanSound(shot.sound);
+    const sound = soundDescription(shot.sound);
     const duration = Math.max(0, Number(shot.duration_seconds) || 0);
     const normalized = sound.toLocaleLowerCase();
     if (sound.length >= 2 && !SILENCE.test(sound) && !seen.has(normalized)) {
