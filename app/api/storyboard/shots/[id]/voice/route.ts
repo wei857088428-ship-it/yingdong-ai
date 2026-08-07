@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
+import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 
 const voices = new Set(["ara", "eve", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris", "altair", "zenith", "perseus", "helios", "lux", "kepler"]);
 const languages = new Set(["zh", "en", "ja", "auto"]);
@@ -29,7 +30,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const body = (await request.json()) as { voiceId?: string; fallbackVoiceId?: string; language?: string; speed?: number; batch?: boolean };
     const language = languages.has(body.language ?? "") ? body.language! : "zh";
-    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,sound,character_names,speaker_character_id").eq("id", id).eq("user_id", user.id).single();
+    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,sound,character_names,speaker_character_id,media_status,video_url").eq("id", id).eq("user_id", user.id).single();
     if (shotError || !shot) throw new Error("未找到这个分镜");
     const text = String(shot.dialogue ?? "").trim();
     if (!text) return NextResponse.json({ error: "这个镜头没有对白或旁白" }, { status: 400 });
@@ -81,7 +82,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const audioDuration = Math.max(0, Number(payload.duration ?? 0));
     const matchedDuration = Math.min(15, Math.max(2, Math.ceil(audioDuration + 0.35)));
     const endMs = startMs + Math.round(audioDuration * 1000);
-    const { data: updated, error: updateError } = await supabase.from("storyboard_shots").update({ audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs }).eq("id", shot.id).eq("user_id", user.id).select("*").single();
+    const updates: Record<string, unknown> = { audio_url: audioUrl, voice_id: voiceId, voice_language: language, duration_seconds: matchedDuration, subtitle_start_ms: startMs, subtitle_end_ms: endMs };
+    if (shot.media_status === "lipsync_ready") {
+      const sourceVideo = await originalVideoUrl(supabase, user.id, shot.project_id, shot.id);
+      Object.assign(updates, { video_url: sourceVideo, media_status: sourceVideo ? "completed" : "pending", error_message: null });
+    }
+    const { data: updated, error: updateError } = await supabase.from("storyboard_shots").update(updates).eq("id", shot.id).eq("user_id", user.id).select("*").single();
     if (updateError) throw updateError;
     const credits = await finishUsage(user.id, eventId, true);
     return NextResponse.json({ shot: updated, credits });
