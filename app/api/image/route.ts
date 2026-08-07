@@ -6,9 +6,9 @@ import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 
 type ReferenceCharacter = { images?: { front?: string; full?: string; left?: string; right?: string } };
 
-function selectReferenceImages(previousImage: string | undefined, characters: ReferenceCharacter[]) {
+function selectReferenceImages(previousImage: string | undefined, characters: ReferenceCharacter[], styleImage?: string) {
   const primary = characters.map((character) => character.images?.front || character.images?.full || character.images?.left || character.images?.right).filter((url): url is string => Boolean(url));
-  const selected = [...new Set([previousImage, ...primary].filter((url): url is string => Boolean(url)))].slice(0, 3);
+  const selected = [...new Set([previousImage, ...primary, styleImage].filter((url): url is string => Boolean(url)))].slice(0, 3);
   if (characters.length === 1 && selected.length < 3) {
     const extra = [characters[0].images?.full, characters[0].images?.left, characters[0].images?.right].filter((url): url is string => Boolean(url));
     for (const url of extra) if (!selected.includes(url) && selected.length < 3) selected.push(url);
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 500 });
   let eventId = "";
   try {
-    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; referenceImage?: string; referenceMode?: "scene" | "identity"; batch?: boolean };
+    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; referenceImage?: string; styleImage?: string; referenceMode?: "scene" | "identity"; batch?: boolean };
     const prompt = body.prompt?.trim();
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
@@ -36,11 +36,12 @@ export async function POST(request: Request) {
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const finalPrompt = prompt + charactersPrompt(characters);
-    const referenceImages = selectReferenceImages(body.referenceImage, characters);
+    const referenceImages = selectReferenceImages(body.referenceImage, characters, body.styleImage);
     const environmentRule = body.referenceMode === "identity"
       ? "上一镜只用于继承人物身份、服装、伤势、随身道具与整体美术风格；当前提示词要求了新地点，因此必须自然切换到当前场景，不要复制上一镜背景。"
       : "如果包含上一镜画面，同时保持场景布局、道具位置、人物站位、光线方向与色调。";
-    const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份。${environmentRule}只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
+    const styleRule = body.styleImage && referenceImages.includes(body.styleImage) ? "本集风格参考图只用于继承画风、线条质感、色彩处理和渲染精度，不得复制其中的人物身份、动作、构图或背景。" : "";
+    const continuityPrompt = referenceImages.length ? `${finalPrompt}\n\n视觉参考图是硬性身份与连续性约束：严格复用参考人物的脸型、五官、发型、服装、体型和身份。${environmentRule}${styleRule}只改变当前镜头要求的动作、表情和机位，不得重新设计人物，不得增加陌生人。` : finalPrompt;
     const editInput = referenceImages.length === 1
       ? { image: { url: referenceImages[0], type: "image_url" } }
       : { images: referenceImages.map((url) => ({ url, type: "image_url" })) };
