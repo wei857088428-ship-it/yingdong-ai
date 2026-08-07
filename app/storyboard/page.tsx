@@ -196,6 +196,8 @@ export default function StoryboardPage() {
       const severeDialogueLimit = shot.duration_seconds * 5.2;
       if (includePerformance && spoken > severeDialogueLimit) critical.push(`${label} 台词严重超长（${spoken} 字/${shot.duration_seconds} 秒），必须缩短或延长镜头后再配音`);
       else if (includePerformance && spoken > mildDialogueLimit) warnings.push(`${label} 台词偏长（${spoken} 字/${shot.duration_seconds} 秒），建议缩短以保留情绪和呼吸空间`);
+      const speakerLabels = [...(shot.dialogue || "").matchAll(/(?:^|[\n。！？!?]\s*)([\p{L}\p{N}_·]{1,12})\s*[：:]/gu)].map((match) => match[1].trim());
+      if (includePerformance && new Set(speakerLabels).size > 1) critical.push(`${label} 同时包含多个说话人（${[...new Set(speakerLabels)].join("、")}），必须拆成一人一镜再配音和同步口型`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
       const performance = shot.sound || "";
       const hasPerformanceDirection = /(?:表演|情绪|语气|口吻)\s*[:：]\s*\S+/.test(performance)
