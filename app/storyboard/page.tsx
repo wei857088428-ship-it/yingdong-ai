@@ -70,7 +70,7 @@ export default function StoryboardPage() {
   const imageReferenceContext = (shot: Shot, previous?: Shot, styleImage?: string) => {
     const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
     const previousIds = new Set(effectiveCharacterIds(previous)); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id)); const sharesCharacter = continuing.length > 0;
-    const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = !sharesCharacter && currentIds.length >= 3;
+    const sceneContinues = sameScene(previous.scene, shot.scene); const needsAllCharacterSlots = currentIds.length >= 3;
     const continuityImage = previous.image_url;
     const referenceImage = continuityImage && (sharesCharacter || (sceneContinues && !needsAllCharacterSlots)) ? continuityImage : undefined;
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
@@ -208,7 +208,12 @@ export default function StoryboardPage() {
         const unboundNames = expectedNames.filter((name) => { const character=characters.find((item)=>item.name.trim().toLocaleLowerCase("zh-CN")===name.trim().toLocaleLowerCase("zh-CN"));return character&&!boundIds.has(character.id); });
         if (absentNames.length) critical.push(`${label} 缺少角色库：${absentNames.join("、")}`);
         if (unboundNames.length) critical.push(`${label} 未绑定角色：${unboundNames.join("、")}`);
-        for (const id of boundIds) { const character=characters.find((item)=>item.id===id);if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);else if(Object.values(character.images).filter(Boolean).length<3)warnings.push(`${label} 的 ${character.name} 只有 ${Object.values(character.images).filter(Boolean).length}/4 个参考角度`); }
+        for (const id of boundIds) {
+          const character=characters.find((item)=>item.id===id); const referenceCount=character ? Object.values(character.images ?? {}).filter(Boolean).length : 0;
+          if(!character?.images?.front)critical.push(`${label} 的 ${character?.name ?? "角色"} 缺少正面参考图`);
+          else if(referenceCount<3)critical.push(`${label} 的 ${character.name} 只有 ${referenceCount}/4 个参考角度，至少补到 3 个再制作`);
+          else if(referenceCount<4)warnings.push(`${label} 的 ${character.name} 已有 ${referenceCount}/4 个参考角度，补齐全身或侧面图会更稳定`);
+        }
       }
     }
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
