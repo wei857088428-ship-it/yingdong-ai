@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
+import { castAssignmentChanged } from "@/app/lib/storyboardCast";
 
 const allowed = ["pending", "image_generating", "image_ready", "video_generating", "lipsync_generating", "lipsync_ready", "completed", "failed"];
 const templates = {
@@ -51,15 +52,19 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     updates.video_prompt = applyPromptTemplate(String(current.video_prompt ?? ""), template.shotType, template.video);
   }
   if (body.characterIds !== undefined) {
-    if (body.characterIds === null) updates.character_ids = null;
-    else {
+    let nextCharacterIds: string[] | null = null;
+    if (body.characterIds !== null) {
       const ids = [...new Set(body.characterIds.filter(Boolean))].slice(0, 6);
       if (ids.length) {
         const { data: owned } = await supabase.from("characters").select("id").in("id", ids).eq("user_id", user.id);
         if ((owned ?? []).length !== ids.length) return NextResponse.json({ error: "镜头包含无效角色" }, { status: 400 });
       }
-      updates.character_ids = ids;
+      nextCharacterIds = ids;
     }
+    const { data: current } = await supabase.from("storyboard_shots").select("character_ids").eq("id", id).eq("user_id", user.id).maybeSingle();
+    if (!current) return NextResponse.json({ error: "未找到这个镜头" }, { status: 404 });
+    updates.character_ids = nextCharacterIds;
+    if (castAssignmentChanged(current.character_ids, nextCharacterIds)) Object.assign(updates, { image_url: null, video_url: null, media_status: "pending", error_message: null });
   }
   if (body.speakerCharacterId !== undefined) {
     if (body.speakerCharacterId) {

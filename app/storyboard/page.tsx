@@ -90,7 +90,7 @@ export default function StoryboardPage() {
   async function toggleShotCharacter(shot: Shot, id: string, checked: boolean) {
     const current = effectiveCharacterIds(shot); const next = checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
     await updateShot(shot.id, { characterIds: next });
-    setStatus(`镜头 ${shot.shot_number} 已绑定 ${next.length} 个角色`);
+    setStatus(`镜头 ${shot.shot_number} 已绑定 ${next.length} 个角色${shot.image_url || shot.video_url ? "，旧画面已清除，请重新生成" : ""}`);
   }
 
   async function applyShotTemplate(shot: Shot, template: "closeup" | "near" | "medium" | "wide", label: string) {
