@@ -162,8 +162,8 @@ export default function StoryboardPage() {
     if (!currentProjectId || batching) return;
     const generated = shots.filter((shot) => shot.audio_url || shot.video_url).length;
     if (generated && !window.confirm(`已有 ${generated} 个镜头生成过配音或视频。修改对白后，这些镜头需要重新制作，避免旧声音和口型错位。确定继续吗？`)) return;
-    setBatching(true); setStatus("AI 正在逐镜修复对白、情绪和台词时长…");
-    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`对白修复完成 · 已校准 ${data.shots.length} 个镜头 · 剩余 ${data.credits} 积分`); }
+    setBatching(true); setStatus("AI 正在逐镜修复对白、情绪、台词时长和连续性提示词…");
+    try { const response = await fetch(`/api/storyboard/projects/${currentProjectId}/polish`, { method: "POST" }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setStatus(`质量修复完成 · 已校准 ${data.shots.length} 个镜头 · 升级 ${data.upgradedPrompts ?? 0} 个连续性提示词 · 剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "对白修复失败"); }
     finally { setBatching(false); }
   }
@@ -307,7 +307,7 @@ export default function StoryboardPage() {
             <div><label>配音语言</label><select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}><option value="zh">普通话</option><option value="en">英语</option><option value="ja">日语</option><option value="auto">自动识别（可尝试粤语）</option></select></div>
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>
             <button disabled={batching} onClick={runQualityCheck}>制作前质量检查</button>
-            <button disabled={batching || !currentProjectId} onClick={() => void polishDialogue()}>AI 修复对白与情绪</button>
+            <button disabled={batching || !currentProjectId} onClick={() => void polishDialogue()}>AI 修复对白、情绪与连续性</button>
             {shots.some((shot) => shot.media_status === "failed" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>一键重试失败任务 · {shots.filter((shot) => shot.media_status === "failed" || Boolean(shot.error_message)).length} 镜</button>}
             <button disabled={batching} onClick={batchImages}>批量生成图片 · {shots.filter((shot) => !shot.image_url).length} 镜</button>
             <button disabled={batching} onClick={batchVideos}>批量图片转视频 · {shots.filter((shot) => shot.image_url && !shot.video_url).length} 镜</button>

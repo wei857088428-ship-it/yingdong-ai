@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
+import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 
 type PolishedShot = { shot_number: number; dialogue: string; sound: string; duration_seconds: number };
 
@@ -32,15 +33,20 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "对白修复失败");
     const polished = parseJson(result?.choices?.[0]?.message?.content ?? "").shots ?? [];
     if (polished.length !== shots.length) throw new Error("AI 返回的镜头数量不完整");
+    let upgradedPrompts = 0;
     for (const item of polished) {
       const current = shots.find((shot) => shot.shot_number === item.shot_number); if (!current) continue;
+      const shotIndex = shots.findIndex((shot) => shot.id === current.id);
       const changed = String(current.dialogue ?? "").trim() !== String(item.dialogue ?? "").trim();
-      const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds))) };
+      const imagePrompt = withContinuityPrompt(String(current.image_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "image");
+      const videoPrompt = withContinuityPrompt(String(current.video_prompt ?? ""), current, shots[shotIndex - 1], shots[shotIndex + 1], "video");
+      if (imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt) upgradedPrompts++;
+      const updates: Record<string, unknown> = { dialogue: String(item.dialogue ?? "").trim(), sound: String(item.sound ?? "").trim(), duration_seconds: Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds))), image_prompt: imagePrompt, video_prompt: videoPrompt };
       if (changed) Object.assign(updates, { audio_url: null, video_url: null, subtitle_start_ms: null, subtitle_end_ms: null, media_status: "pending", error_message: null });
       const { error } = await supabase.from("storyboard_shots").update(updates).eq("id", current.id).eq("user_id", user.id); if (error) throw error;
     }
     const { data: updated } = await supabase.from("storyboard_shots").select("*").eq("project_id", id).eq("user_id", user.id).order("shot_number");
-    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits });
+    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits, upgradedPrompts });
   } catch (error) {
     if (eventId) await finishUsage(user.id, eventId, false).catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "对白修复失败" }, { status: 500 });
