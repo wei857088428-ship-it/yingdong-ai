@@ -6,11 +6,12 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/app/lib/supabase";
 
-type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; image_url?:string; video_url?:string; source_video_url?:string|null; audio_url?:string; voice_id?:string; media_status?:string; subtitle_start_ms?:number; subtitle_end_ms?:number };
+type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; image_url?:string; video_url?:string; source_video_url?:string|null; audio_url?:string; voice_id?:string; media_status?:string; speaker_character_id?:string|null; subtitle_start_ms?:number; subtitle_end_ms?:number };
 type Project = { id:string; title:string; created_at:string; storyboard_shots:Shot[] };
 type CaptionCue = { text:string; start:number; end:number };
 
 function hasEmbeddedVoice(item: Shot) { return item.media_status === "lipsync_ready" || /heygen/i.test(item.video_url || ""); }
+function requiresLipSync(item: Shot) { return Boolean(item.dialogue?.trim()&&item.speaker_character_id); }
 function srtTime(seconds:number) { const ms=Math.max(0,Math.round(seconds*1000));const hours=Math.floor(ms/3600000);const minutes=Math.floor(ms%3600000/60000);const secs=Math.floor(ms%60000/1000);return `${String(hours).padStart(2,"0")}:${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")},${String(ms%1000).padStart(3,"0")}`; }
 
 async function subtitleOverlay(text:string) {
@@ -32,7 +33,7 @@ export default function EpisodePage() {
   const visibleSubtitle = shot ? (!playing ? shot.dialogue : captionTracks[shot.id]?.find((cue)=>elapsed>=cue.start&&elapsed<=cue.end+.08)?.text || (!captionTracks[shot.id]?.length&&elapsed<=subtitleDuration(shot)?shot.dialogue:"")) : "";
   const missingVisualCount=shots.filter((item)=>!item.video_url&&!item.image_url).length;
   const missingVoiceCount=shots.filter((item)=>item.dialogue?.trim()&&!item.audio_url).length;
-  const unsyncedVoiceCount=shots.filter((item)=>item.dialogue?.trim()&&item.video_url&&!hasEmbeddedVoice(item)).length;
+  const unsyncedVoiceCount=shots.filter((item)=>requiresLipSync(item)&&(!item.video_url||!hasEmbeddedVoice(item))).length;
   const episodeReady=shots.length>0&&missingVisualCount===0&&missingVoiceCount===0&&unsyncedVoiceCount===0;
 
   useEffect(() => { supabase.auth.getUser().then(async ({data}) => { if(!data.user){router.replace("/login");return;} const response=await fetch(`/api/storyboard/projects/${params.id}?includeSources=1`,{cache:"no-store"}); const body=await response.json(); if(!response.ok){setError(body.error);return;} setProject(body.project); }); },[params.id,router]);
@@ -55,7 +56,7 @@ export default function EpisodePage() {
 
   async function exportMp4(){ if(!project||exporting)return; const missing=shots.filter((item)=>!item.video_url&&!item.image_url); if(missing.length)return setExportStatus(`还有 ${missing.length} 个镜头没有画面，请先完成整集生成`);
     const missingVoices=shots.filter((item)=>item.dialogue?.trim()&&!item.audio_url);if(missingVoices.length)return setExportStatus(`还有 ${missingVoices.length} 个对白镜头没有配音，已暂停导出`);
-    const unsyncedVoices=shots.filter((item)=>item.dialogue?.trim()&&item.video_url&&!hasEmbeddedVoice(item));if(unsyncedVoices.length)return setExportStatus(`还有 ${unsyncedVoices.length} 个说话视频没有完成口型同步，已暂停导出`);
+    const unsyncedVoices=shots.filter((item)=>requiresLipSync(item)&&(!item.video_url||!hasEmbeddedVoice(item)));if(unsyncedVoices.length)return setExportStatus(`还有 ${unsyncedVoices.length} 个角色对白镜头没有完成说话视频和口型同步，已暂停导出`);
     setExporting(true);setExportProgress(0);setExportStatus("正在加载本地视频渲染器…");let renderer:{terminate:()=>void}|null=null;
     try { const [{FFmpeg},{fetchFile,toBlobURL}]=await Promise.all([import("@ffmpeg/ffmpeg"),import("@ffmpeg/util")]); const ffmpeg=new FFmpeg();renderer=ffmpeg; ffmpeg.on("progress",({progress})=>setExportProgress(Math.max(1,Math.min(99,Math.round(progress*100))))); await ffmpeg.load({coreURL:await toBlobURL("/render-engine/engine","text/javascript"),wasmURL:await toBlobURL("/render-engine/data","application/wasm")}); const segmentNames:string[]=[];
       const fetchWithRetry=async(url:string,label:string)=>{let failure:unknown;for(let attempt=1;attempt<=3;attempt++){try{const response=await fetch(url,{cache:"no-store"});if(!response.ok)throw new Error(`${label} 读取失败（${response.status}）`);return new Uint8Array(await response.arrayBuffer());}catch(error){failure=error;if(attempt<3){setExportStatus(`${label} 读取失败，正在重试 ${attempt}/2…`);await new Promise((resolve)=>setTimeout(resolve,700*attempt));}}}throw failure instanceof Error?failure:new Error(`${label} 读取失败`);};
