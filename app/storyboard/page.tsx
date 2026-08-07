@@ -64,7 +64,7 @@ export default function StoryboardPage() {
     try {
       const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ continueFromProjectId: currentProjectId, shotCount: Number(shotCount) }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error);
-      setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
+      setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(data.project.character_id || ""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
       setStatus(`下一集已生成 ${data.shots.length} 个镜头，剩余 ${data.credits} 积分`);
       window.history.replaceState(null, "", `/storyboard?project=${data.project.id}`);
     } catch (error) { setStatus(error instanceof Error ? error.message : "续写下一集失败"); }
