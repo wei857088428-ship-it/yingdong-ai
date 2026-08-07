@@ -64,6 +64,26 @@ function parseJson(text: string) {
   return JSON.parse(cleaned.slice(start, end + 1)) as { title?: string; shots?: Shot[] };
 }
 
+function cleanStorySource(value: unknown) {
+  const text = String(value ?? "").trim(); const marker = "\n\n原始剧情：\n"; const index = text.lastIndexOf(marker);
+  return (index >= 0 ? text.slice(index + marker.length) : text).trim();
+}
+
+function compactContext(value: string, limit = 6000) {
+  if (value.length <= limit) return value; const half=Math.floor(limit/2);
+  return `${value.slice(0,half)}\n……（中间剧情已压缩）……\n${value.slice(-half)}`;
+}
+
+function worldContextFromSource(value: unknown) {
+  const clean = cleanStorySource(value); const startMarker="世界观背景：\n"; const endMarker="\n\n本集镜头概要：\n";
+  if (clean.startsWith(startMarker)) { const end=clean.indexOf(endMarker);if(end>startMarker.length)return clean.slice(startMarker.length,end).trim(); }
+  return compactContext(clean);
+}
+
+function episodeOutline(shots: Array<{ shot_number?: number; scene?: string; action?: string; dialogue?: string; sound?: string; character_names?: string[] | null }>) {
+  return shots.map((shot) => `镜头${shot.shot_number ?? ""}：场景=${shot.scene ?? ""}；人物=${(shot.character_names ?? []).join("、") || "无具名角色"}；动作=${shot.action ?? ""}${shot.dialogue ? `；对白=${shot.dialogue}` : ""}${shot.sound ? `；状态/声音=${shot.sound}` : ""}`).join("\n");
+}
+
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
@@ -71,14 +91,14 @@ export async function POST(request: Request) {
   let eventId = "";
   try {
     const body = (await request.json()) as { title?: string; story?: string; shotCount?: number; continueFromProjectId?: string };
-    let story = body.story?.trim() ?? ""; let parentProjectId: string | null = null; let inheritedCharacterId: string | null = null; const shotCount = Math.min(30, Math.max(3, Number(body.shotCount ?? 12)));
+    const submittedStory = body.story?.trim() ?? ""; let story = submittedStory; let storedSource = submittedStory; let seriesWorldContext = compactContext(submittedStory); let parentProjectId: string | null = null; let inheritedCharacterId: string | null = null; const shotCount = Math.min(30, Math.max(3, Number(body.shotCount ?? 12)));
     if (body.continueFromProjectId) {
       const { data: previous } = await supabase.from("storyboard_projects").select("id,title,source_text,character_id,storyboard_shots(shot_number,scene,action,dialogue,sound,character_names,character_ids,speaker_character_id)").eq("id", body.continueFromProjectId).eq("user_id", user.id).maybeSingle();
       if (!previous) return NextResponse.json({ error: "没有找到要续写的上一集" }, { status: 404 });
-      const endingShots = (previous.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number).slice(-4);
-      const ending = endingShots.map((shot) => `镜头${shot.shot_number}：场景=${shot.scene}；动作=${shot.action}${shot.dialogue ? `；对白=${shot.dialogue}` : ""}；人物=${(shot.character_names ?? []).join("、")}；状态/声音=${shot.sound ?? ""}`).join("\n");
+      const previousShots = (previous.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number); const endingShots = previousShots.slice(-4);
+      const outline = compactContext(episodeOutline(previousShots),9000); const ending = episodeOutline(endingShots); const worldContext = worldContextFromSource(previous.source_text);seriesWorldContext=worldContext;
       const activeCast = [...new Set(endingShots.flatMap((shot) => shot.character_names ?? []))].join("、") || "沿用上一集人物";
-      story = `请续写《${previous.title}》的下一集。保持原世界观、人物关系、身份、脸、发型、服装、伤势、随身道具与时间线连续，承接上一集最后一个动作的直接结果，不能重置人物状态，不能让已离场人物无解释出现。开场在3秒内回应上一集悬念，推进一个新的冲突，并在结尾留下更强悬念。\n\n必须继承的结尾在场人物：${activeCast}\n\n上一集原始剧情：\n${String(previous.source_text ?? "").slice(-6000)}\n\n上一集结尾状态：\n${ending}`;
+      story = `请续写《${previous.title}》的下一集。保持原世界观、人物关系、身份、脸、发型、服装、伤势、随身道具与时间线连续，承接上一集最后一个动作的直接结果，不能重置人物状态，不能让已离场人物无解释出现。开场在3秒内回应上一集悬念，推进一个新的冲突，并在结尾留下更强悬念。\n\n必须继承的结尾在场人物：${activeCast}\n\n世界观与最初剧情背景：\n${worldContext}\n\n上一集完整镜头概要：\n${outline}\n\n上一集结尾状态：\n${ending}`;
       parentProjectId = previous.id;
       inheritedCharacterId = previous.character_id ?? null;
     }
@@ -146,7 +166,8 @@ export async function POST(request: Request) {
       voice_language: speaker?.voice_language || "zh",
     }; });
     if (!shots.length) throw new Error("没有生成分镜，请重试");
-    const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: story, parent_project_id: parentProjectId, character_id: inheritedCharacterId }).select("id,title,created_at,parent_project_id,character_id").single();
+    if (parentProjectId) storedSource = `世界观背景：\n${seriesWorldContext}\n\n本集镜头概要：\n${episodeOutline(shots)}`;
+    const { data: project, error: projectError } = await supabase.from("storyboard_projects").insert({ user_id: user.id, title: parsed.title || body.title?.trim() || "未命名漫剧", source_text: storedSource, parent_project_id: parentProjectId, character_id: inheritedCharacterId }).select("id,title,created_at,parent_project_id,character_id").single();
     if (projectError) throw projectError;
     const { data: savedShots, error: shotError } = await supabase.from("storyboard_shots").insert(shots.map((shot) => ({ ...shot, project_id: project.id, user_id: user.id }))).select("*").order("shot_number");
     if (shotError) throw shotError;
