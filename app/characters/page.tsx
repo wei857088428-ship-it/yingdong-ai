@@ -9,7 +9,7 @@ import { supabase } from "@/app/lib/supabase";
 type Slot = "front" | "left" | "right" | "full";
 type Character = { id: string; name: string; description: string; version: number; images: Record<Slot, string | undefined>; voice_id: string; voice_language: string };
 const slots: Array<{ key: Slot; label: string }> = [{ key: "front", label: "正面" }, { key: "left", label: "左45°" }, { key: "right", label: "右45°" }, { key: "full", label: "全身" }];
-const voices = [{ id: "orion", label: "Orion · 电影男声" }, { id: "perseus", label: "Perseus · 自信男声" }, { id: "zagan", label: "Zagan · 戏剧角色" }, { id: "carina", label: "Carina · 温柔女声" }, { id: "luna", label: "Luna · 亲和女声" }, { id: "iris", label: "Iris · 活泼女声" }];
+const voices = [{ id: "rex", label: "Rex · 戏剧感男声（推荐）" }, { id: "eve", label: "Eve · 情绪女声（推荐）" }, { id: "leo", label: "Leo · 沉稳男声" }, { id: "ara", label: "Ara · 自然女声" }, { id: "orion", label: "Orion · 电影男声" }, { id: "perseus", label: "Perseus · 自信男声" }, { id: "zagan", label: "Zagan · 戏剧角色" }, { id: "carina", label: "Carina · 温柔女声" }, { id: "luna", label: "Luna · 亲和女声" }, { id: "iris", label: "Iris · 活泼女声" }];
 
 export default function CharactersPage() {
   const router = useRouter();
@@ -17,7 +17,7 @@ export default function CharactersPage() {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [voiceId, setVoiceId] = useState("orion");
+  const [voiceId, setVoiceId] = useState("rex");
   const [voiceLanguage, setVoiceLanguage] = useState("zh");
   const [files, setFiles] = useState<Partial<Record<Slot, File>>>({});
   const [status, setStatus] = useState("");

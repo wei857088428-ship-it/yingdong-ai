@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 500 });
   let eventId = "";
   try {
-    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; batch?: boolean };
+    const body = (await request.json()) as { prompt?: string; aspectRatio?: string; conversationId?: string; characterId?: string; characterIds?: string[]; referenceImage?: string; batch?: boolean };
     const prompt = body.prompt?.trim();
     if (!prompt) return NextResponse.json({ error: "请输入图片描述" }, { status: 400 });
     let conversationId = body.conversationId;
@@ -24,9 +24,12 @@ export async function POST(request: Request) {
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
     const finalPrompt = prompt + charactersPrompt(characters);
-    const response = await fetch("https://api.x.ai/v1/images/generations", {
+    const continuityPrompt = body.referenceImage ? `${finalPrompt}\n\n连续镜头要求：以上一镜画面为视觉锚点，保持完全相同的人物身份、脸型、发型、服装、场景布局、道具位置、光线方向与色调；只改变当前镜头要求的动作和机位。不得重新设计人物或场景。` : finalPrompt;
+    const response = await fetch(body.referenceImage ? "https://api.x.ai/v1/images/edits" : "https://api.x.ai/v1/images/generations", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "grok-imagine-image-quality", prompt: finalPrompt, n: 1, aspect_ratio: body.aspectRatio }), cache: "no-store",
+      body: JSON.stringify(body.referenceImage
+        ? { model: "grok-imagine-image-quality", prompt: continuityPrompt, image: { url: body.referenceImage, type: "image_url" } }
+        : { model: "grok-imagine-image-quality", prompt: continuityPrompt, n: 1, aspect_ratio: body.aspectRatio }), cache: "no-store",
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data?.error?.message ?? "图片生成失败");

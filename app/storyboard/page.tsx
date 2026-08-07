@@ -14,7 +14,7 @@ export default function StoryboardPage() {
   const router = useRouter();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
-  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("orion"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
+  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
     if (!data.user) { router.replace("/login"); return; }
@@ -105,7 +105,7 @@ export default function StoryboardPage() {
       const shot = pending[index]; setStatus(`正在生成配音 ${index + 1}/${pending.length} · 镜头 ${shot.shot_number}`);
       try {
         const speaker = characters.find((character) => character.id === shot.speaker_character_id);
-        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
+        const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error);
         setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item));
       } catch (error) { setStatus(error instanceof Error ? error.message : "配音生成失败"); }
@@ -125,7 +125,7 @@ export default function StoryboardPage() {
     try {
       for (let index = 0; index < working.length; index++) {
         let shot = working[index]; if ((retryShotIds && !retryShotIds.has(shot.id)) || shot.image_url) continue; setStatus(`整集制作 1/3 · 生成图片 ${index + 1}/${working.length} · 镜头 ${shot.shot_number}`);
-        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterIds: effectiveCharacterIds(shot), batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); working[index] = shot; }
+        try { await updateShot(shot.id, { status: "image_generating", error: "" }); const previousImage = index > 0 ? working[index - 1]?.image_url : undefined; const response = await fetch("/api/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: shot.image_prompt, aspectRatio: "9:16", characterIds: effectiveCharacterIds(shot), referenceImage: previousImage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); shot = await updateShot(shot.id, { imageUrl: data.imageUrl, status: "image_ready", error: "" }); working[index] = shot; }
         catch (error) { failures++; working[index] = await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "图片生成失败" }); }
       }
       for (let index = 0; index < working.length; index++) {
@@ -136,7 +136,7 @@ export default function StoryboardPage() {
       const voiceShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.dialogue?.trim() && !shot.audio_url);
       for (let index = 0; index < voiceShots.length; index++) {
         const shot = voiceShots[index]; setStatus(`整集制作 3/3 · 配音与字幕 ${index + 1}/${voiceShots.length} · 镜头 ${shot.shot_number}`);
-        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id || voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
+        try { const speaker = characters.find((character) => character.id === shot.speaker_character_id); const response = await fetch(`/api/storyboard/shots/${shot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, batch: true }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots((current) => current.map((item) => item.id === shot.id ? data.shot : item)); }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "配音生成失败" }); }
       }
       setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、视频、角色配音和字幕时间轴全部完成");
@@ -166,12 +166,12 @@ export default function StoryboardPage() {
       <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); setCurrentProjectId(project.id); setCharacterId(project.character_id || ""); }}>{project.title}<small>{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
       <div className="storyboard-main">
         <div className="storyboard-head"><p className="eyebrow">NOVEL TO STORYBOARD</p><h1>小说一键拆分镜</h1><p>粘贴一章小说，自动拆镜并批量生成整集图片、视频、配音与字幕。</p></div>
-        <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
+        <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
-            <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}><option value="orion">Orion · 电影旁白</option><option value="carina">Carina · 温柔女声</option><option value="zagan">Zagan · 戏剧角色</option><option value="luna">Luna · 亲和女声</option><option value="iris">Iris · 活泼女声</option><option value="perseus">Perseus · 自信男声</option></select></div>
+            <div><label>固定音色</label><select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}><option value="rex">Rex · 戏剧感男声</option><option value="eve">Eve · 情绪女声</option><option value="leo">Leo · 沉稳男声</option><option value="ara">Ara · 自然女声</option><option value="orion">Orion · 电影旁白</option><option value="carina">Carina · 温柔女声</option><option value="zagan">Zagan · 戏剧角色</option><option value="luna">Luna · 亲和女声</option><option value="iris">Iris · 活泼女声</option><option value="perseus">Perseus · 自信男声</option></select></div>
             <div><label>配音语言</label><select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}><option value="zh">普通话</option><option value="en">英语</option><option value="ja">日语</option><option value="auto">自动识别（可尝试粤语）</option></select></div>
             <button className="full-episode-button" disabled={batching} onClick={() => void generateFullEpisode()}>{batching ? "整集制作中…" : "一键生成整集漫剧"}</button>
             {shots.some((shot) => shot.media_status === "failed" || Boolean(shot.error_message)) && <button className="retry-failed-button" disabled={batching} onClick={retryFailedTasks}>一键重试失败任务 · {shots.filter((shot) => shot.media_status === "failed" || Boolean(shot.error_message)).length} 镜</button>}

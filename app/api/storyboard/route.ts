@@ -61,7 +61,7 @@ export async function POST(request: Request) {
   let eventId = "";
   try {
     const body = (await request.json()) as { title?: string; story?: string; shotCount?: number; continueFromProjectId?: string };
-    let story = body.story?.trim() ?? ""; let parentProjectId: string | null = null; const shotCount = Math.min(30, Math.max(6, Number(body.shotCount ?? 12)));
+    let story = body.story?.trim() ?? ""; let parentProjectId: string | null = null; const shotCount = Math.min(30, Math.max(3, Number(body.shotCount ?? 12)));
     if (body.continueFromProjectId) {
       const { data: previous } = await supabase.from("storyboard_projects").select("id,title,source_text,storyboard_shots(shot_number,scene,action,dialogue)").eq("id", body.continueFromProjectId).eq("user_id", user.id).maybeSingle();
       if (!previous) return NextResponse.json({ error: "没有找到要续写的上一集" }, { status: 404 });
