@@ -1,7 +1,15 @@
-type ContinuityShot = { scene?: string; action?: string; character_names?: string[] | null };
+type ContinuityShot = { scene?: string; action?: string; character_names?: string[] | null; continuity_state?: string; image_prompt?: string; video_prompt?: string };
 
 function names(values?: string[] | null) {
   return [...new Set((values ?? []).map((value) => String(value).trim()).filter(Boolean))].slice(0, 6);
+}
+
+function ledger(shot?: ContinuityShot) {
+  if (!shot) return "";
+  const explicit = String(shot.continuity_state ?? "").trim();
+  if (explicit) return explicit;
+  const prompt = `${String(shot.image_prompt ?? "")}\n${String(shot.video_prompt ?? "")}`;
+  return prompt.match(/\[CONTINUITY STATE\]\s*\n?([^\n]+)/i)?.[1]?.trim() ?? "";
 }
 
 export function continuityContract(current: ContinuityShot, previous?: ContinuityShot, next?: ContinuityShot) {
@@ -20,7 +28,9 @@ export function continuityContract(current: ContinuityShot, previous?: Continuit
 
 export function withContinuityPrompt(prompt: string, current: ContinuityShot, previous: ContinuityShot | undefined, next: ContinuityShot | undefined, mode: "image" | "video") {
   const base = String(prompt ?? "").split(/\n\n\[逐镜连续性契约\]/u)[0].trim();
-  const contract = continuityContract(current, previous, next);
+  const currentLedger = ledger(current); const previousLedger = ledger(previous); const nextLedger = ledger(next);
+  const ledgerContract = `\n状态账本：上一镜结束=${previousLedger || "无"}；本镜结束=${currentLedger || "必须按画面明确建立"}；下一镜目标=${nextLedger || "无"}。未被本镜可见事件改变的状态必须逐项继承。`;
+  const contract = `${continuityContract(current, previous, next)}${ledgerContract}`;
   if (mode === "image") return `${base}${contract}`;
   return `${base}${contract}\n视频动作必须从本镜静帧的初始姿势自然开始，只完成“${String(current.action ?? "")}”，并在下一镜可承接的姿势上结束；保持动作速度符合镜头时长，禁止中途跳切、瞬移、变脸、换装和无关动作。`;
 }
