@@ -17,17 +17,23 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const body = (await request.json()) as { voiceId?: string; fallbackVoiceId?: string; language?: string; speed?: number; batch?: boolean };
     const language = languages.has(body.language ?? "") ? body.language! : "zh";
-    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,character_names,speaker_character_id").eq("id", id).eq("user_id", user.id).single();
+    const { data: shot, error: shotError } = await supabase.from("storyboard_shots").select("id,project_id,dialogue,duration_seconds,action,sound,character_names,speaker_character_id").eq("id", id).eq("user_id", user.id).single();
     if (shotError || !shot) throw new Error("未找到这个分镜");
     const text = String(shot.dialogue ?? "").trim();
     if (!text) return NextResponse.json({ error: "这个镜头没有对白或旁白" }, { status: 400 });
-    const performanceContext = `${String(shot.action ?? "")} ${(shot.character_names ?? []).join(" ")}`;
+    const performanceContext = `${String(shot.action ?? "")} ${String(shot.sound ?? "")} ${(shot.character_names ?? []).join(" ")}`;
     const likelyFemale = /苏雨晴|女孩|少女|女人|女性|女主|她/.test(performanceContext) && !shot.speaker_character_id;
     const voiceId = voices.has(body.voiceId ?? "") ? body.voiceId! : likelyFemale ? "eve" : voices.has(body.fallbackVoiceId ?? "") ? body.fallbackVoiceId! : "rex";
-    const whispering = /微弱|虚弱|低声|耳语|气若游丝/.test(performanceContext);
-    const urgent = /惊恐|恐惧|急促|大喊|冲向|警告/.test(performanceContext) || /！|!/.test(text);
-    const speed = Math.min(1.5, Math.max(0.7, Number(body.speed ?? (whispering ? 0.88 : urgent ? 1.1 : 0.96))));
-    const expressiveText = whispering ? `<whisper>${text}</whisper>` : urgent ? `${text.replace(/[。.]$/u, "")}！` : text;
+    const whispering = /微弱|虚弱|低声|耳语|气若游丝|屏息/.test(performanceContext);
+    const urgent = /惊恐|恐惧|急促|大喊|冲向|警告|追赶|崩溃/.test(performanceContext) || /！|!/.test(text);
+    const grieving = /哭|哽咽|悲伤|失去|绝望/.test(performanceContext);
+    const chineseUnits = [...text.replace(/[\s，。！？、…,.!?]/g, "")].length;
+    const targetSeconds = Math.max(2, Number(shot.duration_seconds ?? 5) - 0.35);
+    const durationMatchedSpeed = chineseUnits ? chineseUnits / (4.2 * targetSeconds) : 1;
+    const emotionFactor = whispering || grieving ? 0.92 : urgent ? 1.04 : 1;
+    const speed = Math.min(1.3, Math.max(0.72, Number(body.speed ?? durationMatchedSpeed * emotionFactor)));
+    const punctuatedText = urgent ? text.replace(/[。.]$/u, "！") : grieving ? text.replace(/，/g, "……") : text;
+    const expressiveText = whispering ? `<whisper>${punctuatedText}</whisper>` : punctuatedText;
     const usage = await reserveUsage(user.id, "audio", body.batch === true); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/tts", {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
