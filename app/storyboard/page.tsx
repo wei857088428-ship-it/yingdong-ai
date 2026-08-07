@@ -226,7 +226,7 @@ export default function StoryboardPage() {
       const timeout = window.setTimeout(() => reject(new Error("读取视频时长超时")), 15000);
       const cleanup = () => { window.clearTimeout(timeout); video.removeAttribute("src"); video.load(); };
       video.preload = "metadata";
-      video.onloadedmetadata = () => { const duration = video.duration; cleanup(); Number.isFinite(duration) && duration > 0 ? resolve(duration) : reject(new Error("视频时长无效")); };
+      video.onloadedmetadata = () => { const duration = video.duration; cleanup(); if(Number.isFinite(duration)&&duration>0)resolve(duration);else reject(new Error("视频时长无效")); };
       video.onerror = () => { cleanup(); reject(new Error("读取视频时长失败")); };
       video.src = url;
     });
@@ -248,7 +248,7 @@ export default function StoryboardPage() {
       const query = jobId ? `?jobId=${encodeURIComponent(jobId)}` : "";
       const check = await fetch(`/api/storyboard/shots/${shot.id}/lipsync${query}`, { cache: "no-store" });
       const detail = await check.json(); if (!check.ok) throw new Error(detail.error || "查询口型同步任务失败");
-      if (detail.status === "completed") { setShots((current) => current.map((item) => item.id === shot.id ? detail.shot : item)); return; }
+      if (detail.status === "completed") { const completedShot=detail.shot as Shot;setShots((current) => current.map((item) => item.id === shot.id ? completedShot : item)); return completedShot; }
       if (detail.status === "failed") throw new Error(detail.error || "口型同步失败");
     }
     throw new Error("口型同步仍在处理中，请稍后再试");
@@ -314,7 +314,7 @@ export default function StoryboardPage() {
       const lipSyncShots = working.filter((shot) => (!retryShotIds || retryShotIds.has(shot.id)) && shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot));
       for (let index = 0; index < lipSyncShots.length; index++) {
         const shot = lipSyncShots[index]; setStatus(`整集制作 5/5 · 同步声音与口型 ${index + 1}/${lipSyncShots.length} · 镜头 ${shot.shot_number}`);
-        try { await lipSyncOne(shot); }
+        try { const completedShot=await lipSyncOne(shot);const workingIndex=working.findIndex((item)=>item.id===shot.id);if(workingIndex>=0)working[workingIndex]=completedShot; }
         catch (error) { failures++; await updateShot(shot.id, { status: "failed", error: error instanceof Error ? error.message : "口型同步失败" }); }
       }
       setStatus(failures ? `整集制作完成，${failures} 个任务失败，可单独重试` : "整集图片、情绪配音、视频、字幕和口型同步全部完成，可直接预览或导出");
