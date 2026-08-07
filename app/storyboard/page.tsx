@@ -140,8 +140,15 @@ export default function StoryboardPage() {
 
   async function lipSyncOne(shot: Shot) {
     const mode = lipSyncMode(shot);
-    const duration = await audioDuration(shot.audio_url);
-    const response = await fetch(`/api/storyboard/shots/${shot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, audioDuration: duration }) });
+    let workingShot = shot; let duration = await audioDuration(workingShot.audio_url);
+    if (duration && duration < workingShot.duration_seconds * 0.85) {
+      const speaker = characters.find((character) => character.id === workingShot.speaker_character_id);
+      const voiceResponse = await fetch(`/api/storyboard/shots/${workingShot.id}/voice`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voiceId: speaker?.voice_id, fallbackVoiceId: voiceId, language: speaker?.voice_language || voiceLanguage, targetDuration: workingShot.duration_seconds }) });
+      const voiceData = await voiceResponse.json(); if (!voiceResponse.ok) throw new Error(voiceData.error || "匹配视频时长的配音生成失败");
+      workingShot = { ...voiceData.shot, duration_seconds: shot.duration_seconds } as Shot; duration = await audioDuration(workingShot.audio_url);
+      setShots((current) => current.map((item) => item.id === shot.id ? workingShot : item));
+    }
+    const response = await fetch(`/api/storyboard/shots/${workingShot.id}/lipsync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, audioDuration: duration }) });
     const created = await response.json(); if (!response.ok) throw new Error(created.error || "口型同步创建失败");
     for (let attempt = 0; attempt < 180; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 5000));
