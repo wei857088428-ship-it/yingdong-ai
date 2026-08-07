@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 
-const allowed = ["pending", "image_generating", "image_ready", "video_generating", "completed", "failed"];
+const allowed = ["pending", "image_generating", "image_ready", "video_generating", "lipsync_generating", "lipsync_ready", "completed", "failed"];
 const templates = {
   closeup: { shotType: "特写", camera: "缓慢推进", image: "面部特写，突出眼神与细微表情，浅景深，主体居中", video: "镜头缓慢推进至面部特写，保留细微表情变化" },
   near: { shotType: "近景", camera: "轻微推近", image: "胸部以上近景，突出人物动作和情绪，电影感构图", video: "从稳定近景轻微推近，跟随人物上半身动作" },
