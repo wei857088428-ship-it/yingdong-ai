@@ -15,6 +15,7 @@ import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
 import { parentClosingImageShot, seriesOpeningImageShot } from "@/app/lib/seriesImageReference";
 import { flatPerformanceRun } from "@/app/lib/performanceArc";
 import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
+import { boundedEpisodePlanCount, SERIES_PLAN_COUNTS } from "@/app/lib/seriesPlanning";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -102,20 +103,20 @@ export default function StoryboardPage() {
 
   async function continueProject(count = 1) {
     if (!currentProjectId || loading) return;
-    const episodeCount=Math.min(3,Math.max(1,count));
-    if (!window.confirm(`AI 将按顺序生成 ${episodeCount} 集完整分镜，预计消耗 ${episodeCount} 积分。每一集都会继承前面剧情；中途失败时已成功生成的集数仍会保留。确定继续吗？`)) return;
+    const episodeCount=boundedEpisodePlanCount(count);
+    if (!window.confirm(`AI 将按顺序规划 ${episodeCount} 集完整分镜，预计消耗 ${episodeCount} 积分。本操作只生成剧情和分镜，不会自动生成图片、视频或配音。每一集都会继承前面剧情；中途失败时已成功生成的集数仍会保留。确定继续吗？`)) return;
     setLoading(true);let completed=0;let parentProjectId=currentProjectId;
     try {
       let remainingCredits:number|undefined;
       for(let episodeIndex=0;episodeIndex<episodeCount;episodeIndex++){
-        setStatus(`AI 编剧正在连续创作 ${episodeIndex+1}/${episodeCount}，并核对系列历史账本…`);
+        setStatus(`AI 编剧正在规划第 ${episodeIndex+1}/${episodeCount} 集，并核对人物、世界观和系列历史账本…`);
         const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ continueFromProjectId: parentProjectId, shotCount: Number(shotCount) }) });
         const data = await response.json(); if (!response.ok) throw new Error(data.error);
         parentProjectId=data.project.id;remainingCredits=data.credits;completed++;
         setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setCharacterId(data.project.character_id || ""); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]);
         window.history.replaceState(null, "", `/storyboard?project=${data.project.id}`);
       }
-      setStatus(`已连续生成 ${completed} 集，当前最后一集已打开${remainingCredits===undefined?"":`，剩余 ${remainingCredits} 积分`}`);
+      setStatus(`已连续规划 ${completed} 集分镜，当前最后一集已打开${remainingCredits===undefined?"":`，剩余 ${remainingCredits} 积分`}`);
     } catch (error) { const message=error instanceof Error?error.message:"续写下一集失败";setStatus(completed?`已成功生成 ${completed} 集；后续生成停止：${message}`:message); }
     finally { setLoading(false); }
   }
@@ -427,7 +428,7 @@ export default function StoryboardPage() {
             <button disabled={batching} onClick={() => void batchLipSync()}>批量同步口型 · {shots.filter((shot) => shot.video_url && shot.audio_url && requiresLipSync(shot) && !isLipSynced(shot)).length} 镜</button>
             <button disabled={batching} onClick={exportSrt}>导出 SRT 字幕</button>
           </div>
-          <div className="shot-title"><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span>{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "续写中…" : "AI 续写下一集"}</button>}{currentProjectId && <button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject(3)}>连续生成 3 集</button>}{currentProjectId && <Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link>}</div>
+          <div className="shot-title"><div><h2>{currentTitle}</h2><span>共 {shots.length} 镜 · 约 {shots.reduce((sum, shot) => sum + shot.duration_seconds, 0)} 秒</span></div>{currentProjectId && <div className="series-plan-actions"><button className="sequel-button" disabled={loading || batching} onClick={() => void continueProject()}>{loading ? "规划中…" : "AI 续写下一集"}</button>{SERIES_PLAN_COUNTS.map((count)=><button key={count} className={count===20?"sequel-button series-plan-primary":"sequel-button"} disabled={loading || batching} onClick={() => void continueProject(count)}>{count===20?"一键规划":"连续规划"} {count} 集</button>)}<Link className="episode-link" href={`/episode/${currentProjectId}`}>整集自动剪辑预览 →</Link></div>}</div>
           <div className="shot-list">{shots.map((shot) => <article key={shot.shot_number}>
             {shot.image_url && <Image className="shot-preview" src={shot.image_url} alt={`镜头${shot.shot_number}`} width={600} height={1067} unoptimized/>}
             {shot.video_url && <video className="shot-preview" src={shot.video_url} controls playsInline/>}
