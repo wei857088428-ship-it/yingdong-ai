@@ -50,7 +50,7 @@ export function auditSeriesQuality(projects:AuditProject[],characters:AuditChara
         if(!shot.audio_url)add({level:"critical",code:"missing_voice",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 缺少配音`,...location});
         if(shot.speaker_character_id&&shot.video_url&&shot.audio_url&&shot.media_status!=="lipsync_ready"&&!/heygen/i.test(shot.video_url))add({level:"critical",code:"missing_lipsync",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 的声音和口型未同步`,...location});
       }
-      if(shot.speaker_character_id&&shot.voice_id){const voices=voicesBySpeaker.get(shot.speaker_character_id)??new Set<string>();voices.add(shot.voice_id);voicesBySpeaker.set(shot.speaker_character_id,voices);}
+      if(shot.speaker_character_id&&shot.voice_id){const voices=voicesBySpeaker.get(shot.speaker_character_id)??new Set<string>();voices.add(shot.voice_id);voicesBySpeaker.set(shot.speaker_character_id,voices);const speaker=charactersById.get(shot.speaker_character_id);if(speaker?.voice_id&&speaker.voice_id!==shot.voice_id)add({level:shot.audio_url?"critical":"warning",code:"character_voice_mismatch",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 的音色 ${shot.voice_id} 与角色「${speaker.name}」固定音色 ${speaker.voice_id} 不一致`,...location});}
       for(const characterId of shot.character_ids??[]){
         if(checkedCharacters.has(characterId))continue;checkedCharacters.add(characterId);const character=charactersById.get(characterId);
         if(!character){add({level:"critical",code:"missing_character",message:`第 ${episodeNumber} 集使用了不存在的角色档案`,...location});continue;}
@@ -58,7 +58,7 @@ export function auditSeriesQuality(projects:AuditProject[],characters:AuditChara
         if(references<2)add({level:"warning",code:"weak_identity_reference",message:`角色「${character.name}」只有 ${references}/4 张参考图，跨镜头外貌可能不稳定`,...location});
         if(!character.voice_id)add({level:"warning",code:"missing_character_voice",message:`角色「${character.name}」没有固定音色`,...location});
       }
-      for(const name of shot.character_names??[]){const key=name.trim().toLocaleLowerCase("zh-CN");if(key&&!charactersByName.has(key))add({level:"critical",code:"uncreated_character",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 的角色「${name}」尚未创建角色档案`,...location});}
+      for(const name of shot.character_names??[]){const key=name.trim().toLocaleLowerCase("zh-CN");const character=charactersByName.get(key);if(key&&!character)add({level:"critical",code:"uncreated_character",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 的角色「${name}」尚未创建角色档案`,...location});else if(character&&!(shot.character_ids??[]).includes(character.id))add({level:"critical",code:"unbound_character",message:`第 ${episodeNumber} 集镜头 ${shot.shot_number} 的角色「${name}」没有绑定到统一角色档案`,...location});}
     });
   });
   for(const [speakerId,voices] of voicesBySpeaker){if(voices.size>1){const character=charactersById.get(speakerId);add({level:"warning",code:"voice_drift",message:`角色「${character?.name||speakerId}」在全季使用了 ${voices.size} 种音色，声音一致性不足`});}}
