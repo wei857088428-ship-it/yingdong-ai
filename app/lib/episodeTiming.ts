@@ -7,3 +7,8 @@ export function resolvedShotDuration(declaredSeconds: number, measuredVideoSecon
 export function mediaProbeNeeded(cachedUrl: string | undefined, currentUrl: string | undefined) {
   return Boolean(currentUrl && cachedUrl !== currentUrl);
 }
+
+export function metadataRetryDecision(failureCount: number, maximumFailures = 3) {
+  const failures = Math.max(1, Math.floor(Number(failureCount) || 1));
+  return failures < maximumFailures ? { action: "retry" as const, delayMs: 600 * failures } : { action: "failed" as const, delayMs: 0 };
+}
