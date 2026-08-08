@@ -77,7 +77,7 @@ function validDramaticProgression(shots: Shot[]) {
 }
 
 function validPerformanceArc(shots: Shot[]) {
-  return hasExpressivePerformanceArc(shots.map((shot) => ({ dialogue: shot.dialogue, performance: shot.emotion })));
+  return hasExpressivePerformanceArc(shots.map((shot) => ({ dialogue: shot.dialogue, performance: shot.emotion, speakerKey: shot.speaker_name })));
 }
 
 function cleanStorySource(value: unknown) {
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
       if (reviewResponse.ok) {
         const reviewed = parseJson(reviewedResult?.choices?.[0]?.message?.content ?? "");
         if (reviewed.shots?.length === shotCount && validDramaticProgression(reviewed.shots) && validPerformanceArc(reviewed.shots)) { parsed = reviewed; reviewAccepted = true; }
-        else reviewFailure = reviewed.shots?.length === shotCount ? (!validDramaticProgression(reviewed.shots) ? "审校返回了缺失或重复的剧情推进功能" : "审校返回了连续三段相同的平直情绪表演") : "审校返回的镜头数量不完整";
+        else reviewFailure = reviewed.shots?.length === shotCount ? (!validDramaticProgression(reviewed.shots) ? "审校返回了缺失或重复的剧情推进功能" : "审校返回了同一角色连续三段相同的平直情绪表演") : "审校返回的镜头数量不完整";
       }
       else reviewFailure = reviewedResult?.error?.message ?? `剧情审校请求失败（${reviewResponse.status}）`;
     } catch (error) { reviewFailure = error instanceof Error ? error.message : "剧情审校失败"; }

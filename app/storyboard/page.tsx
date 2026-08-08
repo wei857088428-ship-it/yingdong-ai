@@ -196,7 +196,7 @@ export default function StoryboardPage() {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
-    const critical: string[] = []; const warnings: string[] = []; const dramaticFunctions: string[] = []; const dramaticFunctionShots: number[] = []; const performanceShots: Array<{dialogue:string;performance:string;shotNumber:number}>=[];
+    const critical: string[] = []; const warnings: string[] = []; const dramaticFunctions: string[] = []; const dramaticFunctionShots: number[] = []; const performanceShots: Array<{dialogue:string;performance:string;shotNumber:number;speakerKey?:string|null}>=[];
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
       if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
@@ -222,7 +222,7 @@ export default function StoryboardPage() {
       if (includePerformance && new Set(speakerLabels).size > 1) critical.push(`${label} 同时包含多个说话人（${[...new Set(speakerLabels)].join("、")}），必须拆成一人一镜再配音和同步口型`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
       if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection(shot.sound)) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
-      if(includePerformance&&shot.dialogue?.trim())performanceShots.push({dialogue:shot.dialogue,performance:shot.sound,shotNumber:shot.shot_number});
+      if(includePerformance&&shot.dialogue?.trim())performanceShots.push({dialogue:shot.dialogue,performance:shot.sound,shotNumber:shot.shot_number,speakerKey:shot.speaker_character_id});
       if (includeCharacters) {
         const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
         const visibleCharacterCount = uniqueCharacterCount(expectedNames);
@@ -239,7 +239,7 @@ export default function StoryboardPage() {
         }
       }
     }
-    const flatRun=flatPerformanceRun(performanceShots);if(flatRun)critical.push(`镜头 ${performanceShots[flatRun.startIndex].shotNumber}-${performanceShots[flatRun.endIndex].shotNumber} 连续使用相同情绪、强度、语速和音量，需先执行 AI 修复形成情绪变化`);
+    const flatRun=flatPerformanceRun(performanceShots);if(flatRun){const speakerName=characters.find((character)=>character.id===flatRun.speakerKey)?.name??"旁白";const shotNumbers=flatRun.spokenIndexes.map((index)=>performanceShots[index].shotNumber).join("、");critical.push(`${speakerName} 在镜头 ${shotNumbers} 连续使用相同情绪、强度、语速和音量，需先执行 AI 修复形成情绪变化`);}
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
   }
 
