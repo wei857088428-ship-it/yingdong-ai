@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
-import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
+import { continuityLedger, withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { stableSpeakerVoice } from "@/app/lib/speakerVoice";
 import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 import { hasDistinctDramaticFunctions } from "@/app/lib/dramaticProgression";
@@ -105,14 +105,15 @@ export async function POST(request: Request) {
   let eventId = "";
   try {
     const body = (await request.json()) as { title?: string; story?: string; shotCount?: number; continueFromProjectId?: string };
-    const submittedStory = body.story?.trim() ?? ""; let story = submittedStory; let storedSource = submittedStory; let seriesWorldContext = compactContext(submittedStory); let seriesHistoryContext = ""; let parentProjectId: string | null = null; let inheritedCharacterId: string | null = null; const shotCount = Math.min(30, Math.max(3, Number(body.shotCount ?? 12)));
+    const submittedStory = body.story?.trim() ?? ""; let story = submittedStory; let storedSource = submittedStory; let seriesWorldContext = compactContext(submittedStory); let seriesHistoryContext = ""; let parentProjectId: string | null = null; let inheritedCharacterId: string | null = null; let previousEpisodeClosingShot: {scene?:string;action?:string;dialogue?:string;character_names?:string[]|null;image_prompt?:string;video_prompt?:string}|undefined; const shotCount = Math.min(30, Math.max(3, Number(body.shotCount ?? 12)));
     if (body.continueFromProjectId) {
-      const { data: previous } = await supabase.from("storyboard_projects").select("id,title,source_text,character_id,storyboard_shots(shot_number,scene,action,dialogue,sound,character_names,character_ids,speaker_character_id)").eq("id", body.continueFromProjectId).eq("user_id", user.id).maybeSingle();
+      const { data: previous } = await supabase.from("storyboard_projects").select("id,title,source_text,character_id,storyboard_shots(shot_number,scene,action,dialogue,sound,character_names,character_ids,speaker_character_id,image_prompt,video_prompt)").eq("id", body.continueFromProjectId).eq("user_id", user.id).maybeSingle();
       if (!previous) return NextResponse.json({ error: "没有找到要续写的上一集" }, { status: 404 });
-      const previousShots = (previous.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number); const endingShots = previousShots.slice(-4);
+      const previousShots = (previous.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number); const endingShots = previousShots.slice(-4);previousEpisodeClosingShot=previousShots.at(-1);
       const outline = compactContext(episodeOutline(previousShots),9000); const ending = episodeOutline(endingShots); const sourceContext=parseSeriesSource(cleanStorySource(previous.source_text));const worldContext=worldContextFromSource(previous.source_text);seriesWorldContext=worldContext;seriesHistoryContext=appendSeriesHistory(sourceContext.history,previous.title,outline);
       const activeCast = [...new Set(endingShots.flatMap((shot) => shot.character_names ?? []))].join("、") || "沿用上一集人物";
-      story = `请续写《${previous.title}》的下一集。保持原世界观、人物关系、身份、脸、发型、服装、伤势、随身道具与时间线连续，承接上一集最后一个动作的直接结果，不能重置人物状态，不能让已离场人物无解释出现。开场在3秒内回应上一集悬念，推进一个新的冲突，并在结尾留下更强悬念。\n\n必须继承的结尾在场人物：${activeCast}\n\n世界观与最初剧情背景：\n${worldContext}\n\n系列历史账本（不得推翻已发生事件、人物承诺、伤亡和已揭示秘密）：\n${seriesHistoryContext}\n\n上一集完整镜头概要：\n${outline}\n\n上一集结尾状态：\n${ending}`;
+      const closingLedger=continuityLedger(previousEpisodeClosingShot);
+      story = `请续写《${previous.title}》的下一集。保持原世界观、人物关系、身份、脸、发型、服装、伤势、随身道具与时间线连续，承接上一集最后一个动作的直接结果，不能重置人物状态，不能让已离场人物无解释出现。开场在3秒内回应上一集悬念，推进一个新的冲突，并在结尾留下更强悬念。\n\n必须继承的结尾在场人物：${activeCast}\n\n上一集最后一镜精确状态账本（本集首镜起始状态必须逐项原样继承；只有画面中明确发生的动作才能改变）：\n${closingLedger||"按上一集结尾镜头可见状态继承"}\n\n世界观与最初剧情背景：\n${worldContext}\n\n系列历史账本（不得推翻已发生事件、人物承诺、伤亡和已揭示秘密）：\n${seriesHistoryContext}\n\n上一集完整镜头概要：\n${outline}\n\n上一集结尾状态：\n${ending}`;
       parentProjectId = previous.id;
       inheritedCharacterId = previous.character_id ?? null;
     }
@@ -176,8 +177,8 @@ export async function POST(request: Request) {
       shot_type: String(shot.shot_type ?? ""), camera: String(shot.camera ?? ""), scene: String(shot.scene ?? ""),
       action: String(shot.action ?? ""), dialogue,
       sound: `表演：${String(shot.emotion ?? "自然，强度2，正常语速")}；声音：${String(shot.sound ?? "")}`,
-      image_prompt: withContinuityPrompt(`${String(shot.image_prompt ?? "")}\n[DRAMATIC FUNCTION]\n${String(shot.dramatic_function ?? "")}\n[CAUSAL LINK]\n${String(shot.causal_link ?? "")}\n[CONTINUITY STATE]\n${String(shot.continuity_state ?? "")}`, shot, parsedShots[index - 1], parsedShots[index + 1], "image"),
-      video_prompt: withContinuityPrompt(`${String(shot.video_prompt ?? "")}\n[DRAMATIC FUNCTION]\n${String(shot.dramatic_function ?? "")}\n[CAUSAL LINK]\n${String(shot.causal_link ?? "")}\n[CONTINUITY STATE]\n${String(shot.continuity_state ?? "")}`, shot, parsedShots[index - 1], parsedShots[index + 1], "video"),
+      image_prompt: withContinuityPrompt(`${String(shot.image_prompt ?? "")}\n[DRAMATIC FUNCTION]\n${String(shot.dramatic_function ?? "")}\n[CAUSAL LINK]\n${String(shot.causal_link ?? "")}\n[CONTINUITY STATE]\n${String(shot.continuity_state ?? "")}`, shot, index===0&&previousEpisodeClosingShot?previousEpisodeClosingShot:parsedShots[index - 1], parsedShots[index + 1], "image"),
+      video_prompt: withContinuityPrompt(`${String(shot.video_prompt ?? "")}\n[DRAMATIC FUNCTION]\n${String(shot.dramatic_function ?? "")}\n[CAUSAL LINK]\n${String(shot.causal_link ?? "")}\n[CONTINUITY STATE]\n${String(shot.continuity_state ?? "")}`, shot, index===0&&previousEpisodeClosingShot?previousEpisodeClosingShot:parsedShots[index - 1], parsedShots[index + 1], "video"),
       character_names: characterNames,
       character_ids: matchCharacterIds(characterNames, characters),
       speaker_character_id: speaker?.id ?? matchCharacterId(speakerName, characters),

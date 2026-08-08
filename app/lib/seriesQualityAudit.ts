@@ -1,5 +1,6 @@
 import { flatPerformanceRun } from "./performanceArc";
 import { hasPerformanceDirection } from "./performanceDirection";
+import { continuityLedger } from "./storyboardContinuity";
 
 type AuditShot = {
   id: string;
@@ -13,6 +14,8 @@ type AuditShot = {
   voice_id?: string;
   media_status?: string;
   error_message?: string;
+  image_prompt?: string;
+  video_prompt?: string;
   character_ids?: string[] | null;
   character_names?: string[] | null;
   speaker_character_id?: string | null;
@@ -34,6 +37,7 @@ export function auditSeriesQuality(projects:AuditProject[],characters:AuditChara
   projects.forEach((project,episodeIndex)=>{
     const episodeNumber=episodeIndex+1;
     if(episodeIndex>0&&project.parent_project_id!==projects[episodeIndex-1].id)add({level:"critical",code:"broken_episode_chain",message:`第 ${episodeNumber} 集没有承接上一集，连续剧链已断开`,projectId:project.id,episodeNumber});
+    if(episodeIndex>0){const previous=projects[episodeIndex-1].storyboard_shots.toSorted((left,right)=>right.shot_number-left.shot_number)[0];const first=project.storyboard_shots.toSorted((left,right)=>left.shot_number-right.shot_number)[0];const closingState=continuityLedger(previous);if(closingState&&first&&!`${first.image_prompt||""}\n${first.video_prompt||""}`.includes(`上一镜结束=${closingState}`))add({level:"warning",code:"missing_cross_episode_ledger",message:`第 ${episodeNumber} 集首镜没有锁定上一集结尾的服装、伤势、道具、站位与光线状态，建议重新续写或执行连续性修复`,projectId:project.id,episodeNumber,shotNumber:first.shot_number});}
     if(!project.storyboard_shots.length)add({level:"critical",code:"empty_episode",message:`第 ${episodeNumber} 集没有分镜`,projectId:project.id,episodeNumber});
     const ordered=project.storyboard_shots.toSorted((left,right)=>left.shot_number-right.shot_number);
     const flat=flatPerformanceRun(ordered.map((shot)=>({dialogue:shot.dialogue,performance:shot.sound,speakerKey:shot.speaker_character_id})));
