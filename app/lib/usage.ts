@@ -1,4 +1,6 @@
-import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
+import "server-only";
+
+import { getSupabaseAdmin } from "@/app/lib/supabaseAdmin";
 
 export type UsageKind = "chat" | "image" | "video" | "audio";
 const policy: Record<UsageKind, { cost: number; limit: number; window: number }> = {
@@ -14,7 +16,7 @@ const batchPolicy: Partial<Record<UsageKind, { cost: number; limit: number; wind
 };
 
 export async function reserveUsage(userId: string, kind: UsageKind, batch = false, costOverride?: number) {
-  const supabase = await createServerSupabaseClient();
+  const supabase = getSupabaseAdmin();
   const rule = batch ? batchPolicy[kind] ?? policy[kind] : policy[kind];
   const cost = Number.isFinite(costOverride) ? Math.max(rule.cost, Math.round(costOverride!)) : rule.cost;
   const { data, error } = await supabase.rpc("reserve_credits", {
@@ -31,7 +33,7 @@ export async function reserveUsage(userId: string, kind: UsageKind, batch = fals
 }
 
 export async function finishUsage(userId: string, eventId: string, success: boolean) {
-  const supabase = await createServerSupabaseClient();
+  const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.rpc("finish_usage", { p_user_id: userId, p_event_id: eventId, p_success: success });
   if (error) throw new Error(error.message);
   return Number(data ?? 0);
