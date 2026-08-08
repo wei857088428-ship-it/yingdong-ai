@@ -18,7 +18,8 @@ import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
 import { boundedEpisodePlanCount, SERIES_PLAN_COUNTS } from "@/app/lib/seriesPlanning";
 import { buildSeriesPath } from "@/app/lib/seriesNavigation";
 import { productionSummary, seriesProductionSummary } from "@/app/lib/seriesProduction";
-import { buildSeriesExport, safeSeriesFilename } from "@/app/lib/seriesExport";
+import { buildSeriesExport, episodeSrt, safeSeriesFilename } from "@/app/lib/seriesExport";
+import { createStoredZip, safeArchiveSegment, type ZipFile } from "@/app/lib/zipStore";
 import { estimateProductionCost } from "@/app/lib/productionEstimate";
 import { auditSeriesQuality, type SeriesQualityReport } from "@/app/lib/seriesQualityAudit";
 import { videoPollDecision } from "@/app/lib/videoPolling";
@@ -34,9 +35,10 @@ export default function StoryboardPage() {
   const router = useRouter();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
-  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState(""); const [seriesAudit,setSeriesAudit]=useState<SeriesQualityReport|null>(null); const [savedQueueIds,setSavedQueueIds]=useState<string[]>([]); const [queueRunning,setQueueRunning]=useState(false);
+  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState(""); const [seriesAudit,setSeriesAudit]=useState<SeriesQualityReport|null>(null); const [savedQueueIds,setSavedQueueIds]=useState<string[]>([]); const [queueRunning,setQueueRunning]=useState(false); const [downloadRunning,setDownloadRunning]=useState(false);
   const autoResumeRef = useRef(new Set<string>());
   const queueCancelRef = useRef(false);
+  const downloadCancelRef = useRef(false);
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
     if (!data.user) { router.replace("/login"); return; }
@@ -77,12 +79,12 @@ export default function StoryboardPage() {
   }, [shots, batching]);
 
   useEffect(()=>{
-    if(!queueRunning)return;type WakeLockHandle={released:boolean;release:()=>Promise<void>};let wakeLock:WakeLockHandle|undefined;let disposed=false;const wakeNavigator=navigator as Navigator&{wakeLock?:{request:(type:"screen")=>Promise<WakeLockHandle>}};const originalTitle=document.title;
+    if(!queueRunning&&!downloadRunning)return;type WakeLockHandle={released:boolean;release:()=>Promise<void>};let wakeLock:WakeLockHandle|undefined;let disposed=false;const wakeNavigator=navigator as Navigator&{wakeLock?:{request:(type:"screen")=>Promise<WakeLockHandle>}};const originalTitle=document.title;
     const requestWakeLock=async()=>{if(disposed||document.visibilityState!=="visible"||wakeLock&&!wakeLock.released||!wakeNavigator.wakeLock)return;try{wakeLock=await wakeNavigator.wakeLock.request("screen");}catch{/* The queue remains resumable when wake lock is unavailable. */}};
     const beforeUnload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue="";};const visibility=()=>{if(document.visibilityState==="visible")void requestWakeLock();};
-    document.title="全季制作中 · 影动 AI";window.addEventListener("beforeunload",beforeUnload);document.addEventListener("visibilitychange",visibility);void requestWakeLock();
+    document.title=downloadRunning?"全季下载中 · 影动 AI":"全季制作中 · 影动 AI";window.addEventListener("beforeunload",beforeUnload);document.addEventListener("visibilitychange",visibility);void requestWakeLock();
     return()=>{disposed=true;document.title=originalTitle;window.removeEventListener("beforeunload",beforeUnload);document.removeEventListener("visibilitychange",visibility);void wakeLock?.release().catch(()=>undefined);};
-  },[queueRunning]);
+  },[queueRunning,downloadRunning]);
 
   async function generate(event: FormEvent) {
     event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…");
@@ -469,6 +471,40 @@ export default function StoryboardPage() {
     setStatus(`已导出 ${manifest.series.episodes} 集全季制作包，包含角色设定、分镜、提示词、媒体链接、完成状态与逐集 SRT 字幕`);
   }
 
+  function mediaExtension(url:string,contentType:string,fallback:string){
+    const normalized=contentType.split(";")[0].trim().toLowerCase();const known:Record<string,string>={"video/mp4":"mp4","video/webm":"webm","audio/mpeg":"mp3","audio/mp4":"m4a","audio/wav":"wav","audio/x-wav":"wav","image/jpeg":"jpg","image/png":"png","image/webp":"webp"};
+    if(known[normalized])return known[normalized];
+    try{const match=new URL(url).pathname.match(/\.([a-zA-Z0-9]{2,5})$/);if(match&&/^(mp4|webm|mp3|m4a|wav|jpg|jpeg|png|webp)$/i.test(match[1]))return match[1].toLowerCase();}catch{/* The content type fallback is enough for malformed legacy URLs. */}
+    return fallback;
+  }
+
+  async function fetchMediaFile(url:string){
+    const response=await fetch(`/api/media?url=${encodeURIComponent(url)}`,{cache:"no-store"});
+    if(!response.ok){let detail=`HTTP ${response.status}`;try{const body=await response.json() as {error?:string};if(body.error)detail=body.error;}catch{/* Keep the HTTP status. */}throw new Error(detail);}
+    return {bytes:new Uint8Array(await response.arrayBuffer()),contentType:response.headers.get("content-type")||""};
+  }
+
+  async function downloadSeriesMediaPackages(){
+    if(batching||downloadRunning)return;if(!activeSeries.length)return setStatus("当前没有可下载的连续剧集");
+    const mediaCount=activeSeries.reduce((sum,project)=>sum+project.storyboard_shots.reduce((shotSum,shot)=>shotSum+Number(Boolean(shot.image_url))+Number(Boolean(shot.video_url))+Number(Boolean(shot.audio_url)),0),0);
+    if(!window.confirm(`将按集下载 ${activeSeries.length} 个 ZIP 素材包，共发现 ${mediaCount} 个图片、视频或配音文件。\n\n此操作不生成新内容、不消耗积分；文件可能较大，请保持页面打开，并允许浏览器下载多个文件。确定开始吗？`))return;
+    downloadCancelRef.current=false;setBatching(true);setDownloadRunning(true);let completed=0;let failedFiles=0;
+    try{
+      for(let episodeIndex=0;episodeIndex<activeSeries.length&&!downloadCancelRef.current;episodeIndex++){
+        const project=activeSeries[episodeIndex];const files:ZipFile[]=[];const errors:string[]=[];let packageBytes=0;const maxPackageBytes=750*1024*1024;const sortedShots=project.storyboard_shots.toSorted((a,b)=>a.shot_number-b.shot_number);
+        const episodeManifest={exported_at:new Date().toISOString(),episode_number:episodeIndex+1,project_id:project.id,title:project.title,character_id:project.character_id||null,parent_project_id:project.parent_project_id||null,shots:sortedShots};
+        files.push({name:"episode.json",data:`\uFEFF${JSON.stringify(episodeManifest,null,2)}`},{name:"subtitles.srt",data:`\uFEFF${episodeSrt(sortedShots)}`},{name:"README.txt",data:`影动 AI 第 ${episodeIndex+1} 集素材包\r\n剧集：${project.title}\r\n\r\nimages：镜头图片\r\nvideos：镜头视频（包含已完成的口型同步版本）\r\naudio：对白配音\r\nsubtitles.srt：字幕时间轴\r\nepisode.json：分镜、提示词和媒体清单\r\ndownload-errors.txt：存在时表示部分远程素材未能下载，可按其中地址重试。\r\n`});
+        for(let shotIndex=0;shotIndex<sortedShots.length&&!downloadCancelRef.current;shotIndex++){
+          const shot=sortedShots[shotIndex];const prefix=`shot-${String(shot.shot_number).padStart(2,"0")}`;const sources=[{kind:"图片",folder:"images",url:shot.image_url,fallback:"jpg"},{kind:"视频",folder:"videos",url:shot.video_url,fallback:"mp4"},{kind:"配音",folder:"audio",url:shot.audio_url,fallback:"mp3"}];
+          for(const source of sources){if(downloadCancelRef.current)break;if(!source.url)continue;setStatus(`正在下载第 ${episodeIndex+1}/${activeSeries.length} 集 · 镜头 ${shotIndex+1}/${sortedShots.length} · ${source.kind}`);try{const media=await fetchMediaFile(source.url);if(packageBytes+media.bytes.byteLength>maxPackageBytes)throw new Error("本集素材超过 750MB 浏览器安全上限，请单独下载该素材");packageBytes+=media.bytes.byteLength;files.push({name:`${source.folder}/${prefix}.${mediaExtension(source.url,media.contentType,source.fallback)}`,data:media.bytes});}catch(error){failedFiles++;errors.push(`镜头 ${shot.shot_number} ${source.kind}：${error instanceof Error?error.message:"下载失败"}\r\n${source.url}`);}}
+        }
+        if(downloadCancelRef.current)break;if(errors.length)files.push({name:"download-errors.txt",data:`${errors.join("\r\n\r\n")}\r\n`});
+        setStatus(`正在打包第 ${episodeIndex+1}/${activeSeries.length} 集，共 ${files.length} 个文件…`);const zip=createStoredZip(files);const url=URL.createObjectURL(new Blob([zip],{type:"application/zip"}));const link=document.createElement("a");link.href=url;link.download=`第${String(episodeIndex+1).padStart(2,"0")}集-${safeArchiveSegment(project.title,"影动AI")}-素材包.zip`;document.body.appendChild(link);link.click();link.remove();window.setTimeout(()=>URL.revokeObjectURL(url),30_000);completed++;await new Promise((resolve)=>window.setTimeout(resolve,700));
+      }
+      setStatus(downloadCancelRef.current?`全季下载已安全停止：已完成 ${completed} 集，可稍后重新下载`:`全季素材下载完成：${completed} 集已分包${failedFiles?`，${failedFiles} 个远程素材失败，详情已写入对应素材包`:""}`);
+    }catch(error){setStatus(`全季素材下载中断：${error instanceof Error?error.message:"未知错误"}`);}finally{setBatching(false);setDownloadRunning(false);downloadCancelRef.current=false;}
+  }
+
   function runSeriesQualityAudit() {
     const report=auditSeriesQuality(activeSeries,characters);setSeriesAudit(report);
     setStatus(report.passed?`全季质量验收通过：${report.auditedEpisodes} 集、${report.auditedShots} 镜均已完成角色、配音、口型和媒体检查`:`全季质量验收 ${report.score} 分：${report.criticalCount} 项必须修复、${report.warningCount} 项建议改进。点击下方问题可定位到对应剧集。`);
@@ -514,7 +550,7 @@ export default function StoryboardPage() {
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
-        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{queueRunning?<button type="button" className="series-stop-queue" onClick={()=>{queueCancelRef.current=true;setStatus("已请求停止，将在当前镜头完成后安全保存进度");}}>完成当前镜头后停止</button>:savedQueueIds.length?<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue(true)}>恢复全季制作 · {savedQueueIds.length} 集</button>:nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue()}>一键批量制作全季</button>}{legacyContinuityProjects.length>0&&<button type="button" className="series-continuity-button" disabled={batching} onClick={()=>void repairLegacySeriesContinuity()}>修复旧剧集连续性 · {legacyContinuityProjects.length} 集</button>}<button type="button" className="series-binding-button" disabled={batching} onClick={()=>void repairSeriesBindings()}>修复全季角色与声音</button><button type="button" className="series-audit-button" onClick={runSeriesQualityAudit}>全季质量验收</button><button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" disabled={queueRunning} className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{queueRunning?<button type="button" className="series-stop-queue" onClick={()=>{queueCancelRef.current=true;setStatus("已请求停止，将在当前镜头完成后安全保存进度");}}>完成当前镜头后停止</button>:savedQueueIds.length?<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue(true)}>恢复全季制作 · {savedQueueIds.length} 集</button>:nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue()}>一键批量制作全季</button>}{legacyContinuityProjects.length>0&&<button type="button" className="series-continuity-button" disabled={batching} onClick={()=>void repairLegacySeriesContinuity()}>修复旧剧集连续性 · {legacyContinuityProjects.length} 集</button>}<button type="button" className="series-binding-button" disabled={batching} onClick={()=>void repairSeriesBindings()}>修复全季角色与声音</button><button type="button" className="series-audit-button" onClick={runSeriesQualityAudit}>全季质量验收</button><button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button>{downloadRunning?<button type="button" className="series-stop-queue" onClick={()=>{downloadCancelRef.current=true;setStatus("已请求停止，将在当前文件下载完成后安全停止");}}>完成当前文件后停止下载</button>:<button type="button" className="series-download-button" disabled={batching} onClick={()=>void downloadSeriesMediaPackages()}>批量下载全季素材</button>}</div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" disabled={queueRunning||downloadRunning} className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
         {seriesAudit&&<section className={`series-audit ${seriesAudit.passed?"passed":"needs-work"}`}><header><div><b>全季质量验收 · {seriesAudit.score} 分</b><small>{seriesAudit.criticalCount} 项必须修复 · {seriesAudit.warningCount} 项建议改进</small></div><button type="button" onClick={()=>setSeriesAudit(null)}>收起</button></header>{seriesAudit.passed?<p>剧情链、角色档案、情绪配音、声音一致性、口型同步和媒体完整性均通过。</p>:<div>{seriesAudit.findings.slice(0,16).map((finding,index)=><button type="button" className={finding.level} key={`${finding.code}-${finding.projectId}-${finding.shotNumber}-${index}`} onClick={()=>locateSeriesFinding(finding.projectId,finding.message)}><b>{finding.level==="critical"?"必须修复":"建议"}</b><span>{finding.message}</span></button>)}{seriesAudit.findings.length>16&&<small>另有 {seriesAudit.findings.length-16} 项已写入全季制作包的 quality_audit。</small>}</div>}</section>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
