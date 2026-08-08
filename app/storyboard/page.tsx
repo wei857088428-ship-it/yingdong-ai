@@ -16,6 +16,7 @@ import { parentClosingImageShot, seriesOpeningImageShot } from "@/app/lib/series
 import { flatPerformanceRun } from "@/app/lib/performanceArc";
 import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
 import { boundedEpisodePlanCount, SERIES_PLAN_COUNTS } from "@/app/lib/seriesPlanning";
+import { buildSeriesPath } from "@/app/lib/seriesNavigation";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -403,15 +404,24 @@ export default function StoryboardPage() {
 
   function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterIds: effectiveCharacterIds(shot) })); router.push("/dashboard"); }
 
+  function openProject(project: Project) {
+    setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number));
+    setCurrentTitle(project.title); setCurrentProjectId(project.id); setCharacterId(project.character_id || "");
+    window.history.replaceState(null, "", `/storyboard?project=${project.id}`);
+  }
+
+  const activeSeries = buildSeriesPath(projects,currentProjectId);
+
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
     <section className="storyboard-layout">
-      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button key={project.id} onClick={() => { setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(project.title); setCurrentProjectId(project.id); setCharacterId(project.character_id || ""); }}>{project.title}<small>{project.parent_project_id ? "系列续集 · " : "系列首集 · "}{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
+      <aside className="project-list"><p>分镜项目</p>{projects.map((project) => <button className={project.id===currentProjectId?"active":undefined} key={project.id} onClick={() => openProject(project)}>{project.title}<small>{project.parent_project_id ? "系列续集 · " : "系列首集 · "}{new Date(project.created_at).toLocaleDateString("zh-CN")}</small></button>)}</aside>
       <div className="storyboard-main">
         <div className="storyboard-head"><p className="eyebrow">NOVEL TO STORYBOARD</p><h1>小说一键拆分镜</h1><p>粘贴一章小说，自动拆镜并批量生成整集图片、视频、配音与字幕。</p></div>
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>连续剧集</b><small>共加载 {activeSeries.length} 集 · 当前第 {activeSeries.findIndex((project)=>project.id===currentProjectId)+1} 集</small></div><div>{activeSeries.map((project,index)=><button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集</span><small>{project.title}</small></button>)}</div></nav>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
