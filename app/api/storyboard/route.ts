@@ -201,6 +201,6 @@ export async function POST(request: Request) {
 export async function GET() {
   const user = await getCurrentUser(); if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const supabase = await createServerSupabaseClient();
-  const { data } = await supabase.from("storyboard_projects").select("id,title,created_at,parent_project_id,character_id,storyboard_shots(*)").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20);
+  const { data } = await supabase.from("storyboard_projects").select("id,title,created_at,parent_project_id,character_id,storyboard_shots(*)").eq("user_id", user.id).order("created_at", { ascending: false }).limit(60);
   return NextResponse.json({ projects: data ?? [] });
 }
