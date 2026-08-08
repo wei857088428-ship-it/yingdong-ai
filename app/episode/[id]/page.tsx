@@ -9,6 +9,7 @@ import { episodeAudioPlan } from "@/app/lib/episodeAudioPlan";
 import { episodeSoundCues, soundEffectFilter, type EpisodeSoundCue } from "@/app/lib/episodeSoundPlan";
 import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
 import { resolvedShotDuration } from "@/app/lib/episodeTiming";
+import { episodeMixFilters } from "@/app/lib/episodeMixPlan";
 
 type Shot = { id:string; shot_number:number; duration_seconds:number; scene:string; dialogue:string; sound?:string; image_url?:string; video_url?:string; source_video_url?:string|null; audio_url?:string; voice_id?:string; media_status?:string; speaker_character_id?:string|null; subtitle_start_ms?:number; subtitle_end_ms?:number };
 type Project = { id:string; title:string; created_at:string; storyboard_shots:Shot[] };
@@ -97,7 +98,17 @@ export default function EpisodePage() {
       }
       await ffmpeg.writeFile("segments.txt",segmentNames.map((name)=>`file '${name}'`).join("\n"));setExportStatus("正在合并整集并封装 MP4…");setExportProgress(95);
       const concatExit=await ffmpeg.exec(["-f","concat","-safe","0","-i","segments.txt","-c","copy","-movflags","+faststart","episode-raw.mp4"]);if(concatExit!==0)throw new Error("整集镜头合并失败");let outputName="episode-raw.mp4";
-      if(music?.byteLength||soundEffects.length){setExportStatus(`正在混入${music?.byteLength?"背景音乐":""}${music?.byteLength&&soundEffects.length?"和":""}${soundEffects.length?`${soundEffects.length} 个关键音效`:""}…`);const finalInputs=["-i","episode-raw.mp4"];const filters=["[0:a]aresample=44100[dialogue]"];const mixLabels=["[dialogue]"];let nextInput=1;if(music?.byteLength){await ffmpeg.writeFile("music.wav",music);finalInputs.push("-stream_loop","-1","-i","music.wav");const musicFadeOut=Math.max(0,total-1).toFixed(3);filters.push(`[${nextInput}:a]volume=.08,afade=t=in:st=0:d=.8,afade=t=out:st=${musicFadeOut}:d=1[music]`);mixLabels.push("[music]");nextInput++;}for(let effectIndex=0;effectIndex<soundEffects.length;effectIndex++){const effect=soundEffects[effectIndex];const effectName=`effect-${effectIndex}.wav`;const label=`effect${effectIndex}`;await ffmpeg.writeFile(effectName,effect.audio);finalInputs.push("-i",effectName);filters.push(soundEffectFilter(nextInput,effect.cue,label));mixLabels.push(`[${label}]`);nextInput++;}filters.push(`${mixLabels.join("")}amix=inputs=${mixLabels.length}:duration=first:dropout_transition=0,alimiter=limit=.95[a]`);const mixExit=await ffmpeg.exec([...finalInputs,"-filter_complex",filters.join(";"),"-map","0:v","-map","[a]","-c:v","copy","-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart","episode.mp4"]);if(mixExit===0){outputName="episode.mp4";musicApplied=Boolean(music?.byteLength);effectsApplied=soundEffects.length;}else await ffmpeg.deleteFile("episode.mp4").catch(()=>undefined);}
+      if(music?.byteLength||soundEffects.length){
+        setExportStatus(`正在混入${music?.byteLength?"背景音乐":""}${music?.byteLength&&soundEffects.length?"和":""}${soundEffects.length?`${soundEffects.length} 个关键音效`:""}…`);
+        const finalInputs=["-i","episode-raw.mp4"];let nextInput=1;let musicInput:number|null=null;
+        if(music?.byteLength){await ffmpeg.writeFile("music.wav",music);finalInputs.push("-stream_loop","-1","-i","music.wav");musicInput=nextInput++;}
+        const effectMixes:Array<{filter:string;label:string}>=[];
+        for(let effectIndex=0;effectIndex<soundEffects.length;effectIndex++){const effect=soundEffects[effectIndex];const effectName=`effect-${effectIndex}.wav`;const label=`effect${effectIndex}`;await ffmpeg.writeFile(effectName,effect.audio);finalInputs.push("-i",effectName);effectMixes.push({filter:soundEffectFilter(nextInput,effect.cue,label),label});nextInput++;}
+        const outputArgs=["-map","0:v","-map","[a]","-c:v","copy","-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart","episode.mp4"];
+        let mixExit=await ffmpeg.exec([...finalInputs,"-filter_complex",episodeMixFilters(musicInput,total,effectMixes,true).join(";"),...outputArgs]);
+        if(mixExit!==0&&musicInput!==null){await ffmpeg.deleteFile("episode.mp4").catch(()=>undefined);setExportStatus("动态压低配乐不可用，正在使用兼容混音…");mixExit=await ffmpeg.exec([...finalInputs,"-filter_complex",episodeMixFilters(musicInput,total,effectMixes,false).join(";"),...outputArgs]);}
+        if(mixExit===0){outputName="episode.mp4";musicApplied=Boolean(music?.byteLength);effectsApplied=soundEffects.length;}else await ffmpeg.deleteFile("episode.mp4").catch(()=>undefined);
+      }
       const output=await ffmpeg.readFile(outputName);if(typeof output==="string"||output.byteLength<1024)throw new Error("视频编码结果为空或异常");
       for(const name of [...segmentNames,"segments.txt","episode-raw.mp4","episode.mp4","music.wav",...soundEffects.map((_,effectIndex)=>`effect-${effectIndex}.wav`)])await ffmpeg.deleteFile(name).catch(()=>undefined);
       const url=URL.createObjectURL(new Blob([output as Uint8Array<ArrayBuffer>],{type:"video/mp4"}));const link=document.createElement("a");link.href=url;link.download=`${project.title}-影动AI.mp4`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),30000);setExportProgress(100);const soundSummary=[musicApplied?musicName:"",effectsApplied?`${effectsApplied} 个关键镜头音效`:""].filter(Boolean).join("、");setExportStatus(soundSummary?`整集 MP4 已导出，已自动混入：${soundSummary}`:"整集 MP4 已导出到下载文件夹");
