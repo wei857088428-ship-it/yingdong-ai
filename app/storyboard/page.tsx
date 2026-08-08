@@ -20,6 +20,7 @@ import { buildSeriesPath } from "@/app/lib/seriesNavigation";
 import { productionSummary, seriesProductionSummary } from "@/app/lib/seriesProduction";
 import { buildSeriesExport, safeSeriesFilename } from "@/app/lib/seriesExport";
 import { estimateProductionCost } from "@/app/lib/productionEstimate";
+import { auditSeriesQuality, type SeriesQualityReport } from "@/app/lib/seriesQualityAudit";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -29,7 +30,7 @@ export default function StoryboardPage() {
   const router = useRouter();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
-  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState("");
+  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState(""); const [seriesAudit,setSeriesAudit]=useState<SeriesQualityReport|null>(null);
   const autoResumeRef = useRef(new Set<string>());
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
@@ -407,12 +408,19 @@ export default function StoryboardPage() {
 
   function exportSeriesPackage() {
     if (!activeSeries.length) return setStatus("当前没有可导出的连续剧集");
-    const manifest = buildSeriesExport(activeSeries,characters);
+    const manifest = { ...buildSeriesExport(activeSeries,characters), quality_audit:auditSeriesQuality(activeSeries,characters) };
     const url = URL.createObjectURL(new Blob([`\uFEFF${JSON.stringify(manifest,null,2)}`],{type:"application/json;charset=utf-8"}));
     const link = document.createElement("a"); link.href=url; link.download=safeSeriesFilename(activeSeries[0]?.title||currentTitle); link.click();
     window.setTimeout(()=>URL.revokeObjectURL(url),1000);
     setStatus(`已导出 ${manifest.series.episodes} 集全季制作包，包含角色设定、分镜、提示词、媒体链接、完成状态与逐集 SRT 字幕`);
   }
+
+  function runSeriesQualityAudit() {
+    const report=auditSeriesQuality(activeSeries,characters);setSeriesAudit(report);
+    setStatus(report.passed?`全季质量验收通过：${report.auditedEpisodes} 集、${report.auditedShots} 镜均已完成角色、配音、口型和媒体检查`:`全季质量验收 ${report.score} 分：${report.criticalCount} 项必须修复、${report.warningCount} 项建议改进。点击下方问题可定位到对应剧集。`);
+  }
+
+  function locateSeriesFinding(projectId?:string,message?:string){const project=activeSeries.find((item)=>item.id===projectId);if(project)openProject(project);if(message)setStatus(message);}
 
   function continueSeriesProductionQueue() {
     if (!nextIncompleteProject) return setStatus("当前已加载的全季镜头都已制作完成");
@@ -446,7 +454,8 @@ export default function StoryboardPage() {
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
-        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={continueSeriesProductionQueue}>继续全季制作队列</button>}<button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={continueSeriesProductionQueue}>继续全季制作队列</button>}<button type="button" className="series-audit-button" onClick={runSeriesQualityAudit}>全季质量验收</button><button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
+        {seriesAudit&&<section className={`series-audit ${seriesAudit.passed?"passed":"needs-work"}`}><header><div><b>全季质量验收 · {seriesAudit.score} 分</b><small>{seriesAudit.criticalCount} 项必须修复 · {seriesAudit.warningCount} 项建议改进</small></div><button type="button" onClick={()=>setSeriesAudit(null)}>收起</button></header>{seriesAudit.passed?<p>剧情链、角色档案、情绪配音、声音一致性、口型同步和媒体完整性均通过。</p>:<div>{seriesAudit.findings.slice(0,16).map((finding,index)=><button type="button" className={finding.level} key={`${finding.code}-${finding.projectId}-${finding.shotNumber}-${index}`} onClick={()=>locateSeriesFinding(finding.projectId,finding.message)}><b>{finding.level==="critical"?"必须修复":"建议"}</b><span>{finding.message}</span></button>)}{seriesAudit.findings.length>16&&<small>另有 {seriesAudit.findings.length-16} 项已写入全季制作包的 quality_audit。</small>}</div>}</section>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
