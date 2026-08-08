@@ -8,6 +8,7 @@ import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
 import { hasDistinctDramaticFunctions } from "@/app/lib/dramaticProgression";
 import { MAX_IDENTITY_REFERENCES } from "@/app/lib/storyboardCharacterLimit";
 import { appendSeriesHistory, formatSeriesSource, parseSeriesSource } from "@/app/lib/seriesContinuity";
+import { hasExpressivePerformanceArc } from "@/app/lib/performanceArc";
 
 type Shot = { shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; emotion: string; sound: string; image_prompt: string; video_prompt: string; dramatic_function: string; causal_link: string; continuity_state: string; character_names: string[]; speaker_name: string; speaker_voice: "female" | "male" | "neutral" };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string };
@@ -73,6 +74,10 @@ function parseJson(text: string) {
 
 function validDramaticProgression(shots: Shot[]) {
   return hasDistinctDramaticFunctions(shots.map((shot) => String(shot.dramatic_function ?? "")));
+}
+
+function validPerformanceArc(shots: Shot[]) {
+  return hasExpressivePerformanceArc(shots.map((shot) => ({ dialogue: shot.dialogue, performance: shot.emotion })));
 }
 
 function cleanStorySource(value: unknown) {
@@ -146,8 +151,8 @@ export async function POST(request: Request) {
       const reviewedResult = await reviewResponse.json();
       if (reviewResponse.ok) {
         const reviewed = parseJson(reviewedResult?.choices?.[0]?.message?.content ?? "");
-        if (reviewed.shots?.length === shotCount && validDramaticProgression(reviewed.shots)) { parsed = reviewed; reviewAccepted = true; }
-        else reviewFailure = reviewed.shots?.length === shotCount ? "审校返回了缺失或重复的剧情推进功能" : "审校返回的镜头数量不完整";
+        if (reviewed.shots?.length === shotCount && validDramaticProgression(reviewed.shots) && validPerformanceArc(reviewed.shots)) { parsed = reviewed; reviewAccepted = true; }
+        else reviewFailure = reviewed.shots?.length === shotCount ? (!validDramaticProgression(reviewed.shots) ? "审校返回了缺失或重复的剧情推进功能" : "审校返回了连续三段相同的平直情绪表演") : "审校返回的镜头数量不完整";
       }
       else reviewFailure = reviewedResult?.error?.message ?? `剧情审校请求失败（${reviewResponse.status}）`;
     } catch (error) { reviewFailure = error instanceof Error ? error.message : "剧情审校失败"; }

@@ -13,6 +13,7 @@ import { MAX_IDENTITY_REFERENCES, uniqueCharacterCount } from "@/app/lib/storybo
 import { lipSyncPollDecision } from "@/app/lib/lipsyncPolling";
 import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
 import { parentClosingImageShot, seriesOpeningImageShot } from "@/app/lib/seriesImageReference";
+import { flatPerformanceRun } from "@/app/lib/performanceArc";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -195,7 +196,7 @@ export default function StoryboardPage() {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
-    const critical: string[] = []; const warnings: string[] = []; const dramaticFunctions: string[] = []; const dramaticFunctionShots: number[] = [];
+    const critical: string[] = []; const warnings: string[] = []; const dramaticFunctions: string[] = []; const dramaticFunctionShots: number[] = []; const performanceShots: Array<{dialogue:string;performance:string;shotNumber:number}>=[];
     for (const shot of items) {
       const label = `镜头 ${shot.shot_number}`;
       if (includeVisual && (!shot.image_prompt?.trim() || !shot.video_prompt?.trim())) critical.push(`${label} 缺少图片或视频提示词`);
@@ -221,6 +222,7 @@ export default function StoryboardPage() {
       if (includePerformance && new Set(speakerLabels).size > 1) critical.push(`${label} 同时包含多个说话人（${[...new Set(speakerLabels)].join("、")}），必须拆成一人一镜再配音和同步口型`);
       if (shot.dialogue?.trim() && !shot.speaker_character_id) warnings.push(`${label} 有对白但没有绑定说话角色`);
       if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection(shot.sound)) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
+      if(includePerformance&&shot.dialogue?.trim())performanceShots.push({dialogue:shot.dialogue,performance:shot.sound,shotNumber:shot.shot_number});
       if (includeCharacters) {
         const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
         const visibleCharacterCount = uniqueCharacterCount(expectedNames);
@@ -237,6 +239,7 @@ export default function StoryboardPage() {
         }
       }
     }
+    const flatRun=flatPerformanceRun(performanceShots);if(flatRun)critical.push(`镜头 ${performanceShots[flatRun.startIndex].shotNumber}-${performanceShots[flatRun.endIndex].shotNumber} 连续使用相同情绪、强度、语速和音量，需先执行 AI 修复形成情绪变化`);
     return { critical, warnings, score: Math.max(0, 100 - critical.length * 25 - warnings.length * 6) };
   }
 
