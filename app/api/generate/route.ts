@@ -37,8 +37,20 @@ export async function POST(request: Request) {
       if (references.length) requestBody.reference_images = references.map((url) => ({ url }));
     }
     const response = await fetch("https://api.x.ai/v1/videos/generations", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(requestBody), cache: "no-store" });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data?.error?.message ?? data?.message ?? "xAI 视频生成失败");
+    const rawResponse = await response.text();
+    let data: Record<string, unknown> = {};
+    try { data = rawResponse ? JSON.parse(rawResponse) as Record<string, unknown> : {}; } catch { data = {}; }
+    if (!response.ok) {
+      const providerError = data.error;
+      const detail = typeof providerError === "string"
+        ? providerError
+        : providerError && typeof providerError === "object" && "message" in providerError
+          ? String(providerError.message)
+          : typeof data.message === "string"
+            ? data.message
+            : rawResponse.slice(0, 300);
+      throw new Error(`xAI 视频请求失败（${response.status}）${detail ? `：${detail}` : ""}`);
+    }
     const requestId = data.request_id;
     if (!requestId) throw new Error("视频服务未返回任务 ID");
     const { data: work, error: workError } = await supabase.from("works").insert({ user_id: user.id, conversation_id: conversationId, type: "video", prompt, status: "processing", provider_task_id: requestId, usage_event_id: eventId }).select("id").single();
