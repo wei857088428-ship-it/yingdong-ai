@@ -7,6 +7,7 @@ import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; characterIds?: string[]; batch?: boolean };
 
 const XAI_VIDEO_PROMPT_BYTE_LIMIT = 3900;
+const LIPSYNC_SOURCE_DIRECTION = "\n[后期口型底片] 人物只做眼神、呼吸、吞咽和面部微表情；嘴唇自然闭合，不自行说话、不生成随机口型。开头保留约0.3秒闭嘴反应，后续由真实配音精确驱动嘴型。";
 
 function utf8Length(value: string) { return new TextEncoder().encode(value).length; }
 
@@ -63,7 +64,8 @@ export async function POST(request: Request) {
     const usage = await reserveUsage(user.id, "video", body.batch === true, resolution === "720p" ? 112 : 80); eventId = usage.eventId;
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
-    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: fitVideoPrompt(prompt, charactersPrompt(characters)), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution };
+    const motionPrompt = body.image ? prompt + LIPSYNC_SOURCE_DIRECTION : prompt;
+    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: fitVideoPrompt(motionPrompt, charactersPrompt(characters)), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution };
     if (body.image) requestBody.image = { url: body.image };
     else if (duration <= 10) {
       const references = [...new Set(characters.flatMap((character) => [character.images?.front, character.images?.full, character.images?.left, character.images?.right]).filter((url): url is string => Boolean(url)))].slice(0, 7);
