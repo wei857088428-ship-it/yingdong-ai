@@ -1,8 +1,13 @@
 type PerformanceBeat = { dialogue?: string; performance?: string; speakerKey?: string | null };
 
+export function primaryPerformanceDirection(value?: string) {
+  const text = String(value ?? "");
+  return text.match(/(?:表演|情绪|语气|口吻)\s*[:：]\s*([\s\S]*?)(?=[，,；;。]\s*(?:潜台词|声音|环境声|动作音效)\s*[:：]?|$)/)?.[1]?.trim() || text;
+}
+
 export function performanceSignature(value?: string) {
   const text = String(value ?? "").toLocaleLowerCase("zh-CN");
-  const direction = text.match(/(?:表演|情绪|语气|口吻)\s*[:：]\s*([\s\S]*?)(?=[，,；;。]\s*(?:潜台词|声音|环境声|动作音效)\s*[:：]?|$)/)?.[1] ?? text;
+  const direction = primaryPerformanceDirection(text);
   const categoryGroups: Array<[string, RegExp]> = [
     ["anger", /愤怒|暴怒|怒吼|咆哮|质问|仇恨/], ["fear", /恐惧|惊恐|害怕|颤抖/],
     ["grief", /悲伤|悲痛|绝望|哽咽|哭泣|抽泣/], ["joy", /开心|喜悦|兴奋|惊喜|振奋/],
