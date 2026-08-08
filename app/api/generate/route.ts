@@ -6,6 +6,22 @@ import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 
 type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; characterIds?: string[]; batch?: boolean };
 
+const XAI_VIDEO_PROMPT_LIMIT = 4000;
+
+function fitVideoPrompt(prompt: string, identityPrompt: string) {
+  const combined = prompt + identityPrompt;
+  if (combined.length <= XAI_VIDEO_PROMPT_LIMIT) return combined;
+
+  // Storyboard prompts repeat continuity state in the middle. Keep the opening
+  // action/camera direction, the closing lip-sync contract, and character lock.
+  const marker = "\n[重复的连续性说明已压缩]\n";
+  const identity = identityPrompt.slice(-Math.min(identityPrompt.length, 900));
+  const available = Math.max(800, XAI_VIDEO_PROMPT_LIMIT - identity.length - marker.length);
+  const headLength = Math.ceil(available * 0.62);
+  const tailLength = available - headLength;
+  return prompt.slice(0, headLength) + marker + prompt.slice(-tailLength) + identity;
+}
+
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "请先登录后再生成视频" }, { status: 401 });
@@ -30,7 +46,7 @@ export async function POST(request: Request) {
     const usage = await reserveUsage(user.id, "video", body.batch === true, resolution === "720p" ? 112 : 80); eventId = usage.eventId;
     await supabase.from("messages").insert({ conversation_id: conversationId, user_id: user.id, role: "user", content: prompt });
     const characters = await getCharacters(user.id, body.characterIds?.length ? body.characterIds : body.characterId ? [body.characterId] : []);
-    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: prompt + charactersPrompt(characters), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution };
+    const requestBody: Record<string, unknown> = { model: "grok-imagine-video", prompt: fitVideoPrompt(prompt, charactersPrompt(characters)), duration, aspect_ratio: body.aspectRatio ?? "9:16", resolution };
     if (body.image) requestBody.image = { url: body.image };
     else if (duration <= 10) {
       const references = [...new Set(characters.flatMap((character) => [character.images?.front, character.images?.full, character.images?.left, character.images?.right]).filter((url): url is string => Boolean(url)))].slice(0, 7);
