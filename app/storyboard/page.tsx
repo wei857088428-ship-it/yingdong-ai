@@ -25,13 +25,15 @@ import { auditSeriesQuality, type SeriesQualityReport } from "@/app/lib/seriesQu
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
 type Character = { id: string; name: string; version: number; voice_id?: string; voice_language?: string; images?: { front?: string; left?: string; right?: string; full?: string } };
+const SERIES_QUEUE_STORAGE_KEY="yingdong-series-production-queue-v1";
 
 export default function StoryboardPage() {
   const router = useRouter();
   const [story, setStory] = useState(""); const [title, setTitle] = useState(""); const [shotCount, setShotCount] = useState("12");
   const [shots, setShots] = useState<Shot[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [characters, setCharacters] = useState<Character[]>([]);
-  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState(""); const [seriesAudit,setSeriesAudit]=useState<SeriesQualityReport|null>(null);
+  const [currentTitle, setCurrentTitle] = useState(""); const [currentProjectId, setCurrentProjectId] = useState(""); const [characterId, setCharacterId] = useState(""); const [voiceId, setVoiceId] = useState("rex"); const [voiceLanguage, setVoiceLanguage] = useState("zh"); const [videoResolution,setVideoResolution]=useState<"480p"|"720p">("720p"); const [loading, setLoading] = useState(false); const [batching, setBatching] = useState(false); const [status, setStatus] = useState(""); const [seriesAudit,setSeriesAudit]=useState<SeriesQualityReport|null>(null); const [savedQueueIds,setSavedQueueIds]=useState<string[]>([]); const [queueRunning,setQueueRunning]=useState(false);
   const autoResumeRef = useRef(new Set<string>());
+  const queueCancelRef = useRef(false);
 
   useEffect(() => { supabase.auth.getUser().then(async ({ data }) => {
     if (!data.user) { router.replace("/login"); return; }
@@ -48,6 +50,7 @@ export default function StoryboardPage() {
     const selected = requestedProject ?? allProjects[0];
     if (selected) { setShots(selected.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number)); setCurrentTitle(selected.title); setCurrentProjectId(selected.id); setCharacterId(selected.character_id || ""); }
     setCharacters(((characterResult.data ?? []) as Character[]).map((character) => ({ ...character, voice_id: normalizeVoiceId(character.voice_id) })));
+    try { const saved=JSON.parse(localStorage.getItem(SERIES_QUEUE_STORAGE_KEY)||"null") as {projectIds?:string[]}|null;setSavedQueueIds(Array.isArray(saved?.projectIds)?saved.projectIds:[]); } catch { localStorage.removeItem(SERIES_QUEUE_STORAGE_KEY); }
   }); }, [router]);
 
   useEffect(() => {
@@ -78,24 +81,28 @@ export default function StoryboardPage() {
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
 
-  async function updateShot(id: string, body: Record<string, string | string[] | null>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "保存镜头失败"); setShots((current) => current.map((shot) => shot.id === id ? { ...shot, ...data.shot } : shot)); return data.shot as Shot; }
+  function syncProjectShot(projectId:string,updated:Shot){setProjects((current)=>current.map((project)=>project.id===projectId?{...project,storyboard_shots:project.storyboard_shots.map((shot)=>shot.id===updated.id?{...shot,...updated}:shot)}:project));if(projectId===currentProjectId)setShots((current)=>current.map((shot)=>shot.id===updated.id?{...shot,...updated}:shot));}
+  async function patchProjectShot(projectId:string,id: string, body: Record<string, string | string[] | null>) { const response = await fetch(`/api/storyboard/shots/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "保存镜头失败");const updated=data.shot as Shot;syncProjectShot(projectId,updated);return updated; }
+  async function updateShot(id: string, body: Record<string, string | string[] | null>) { return patchProjectShot(currentProjectId,id,body); }
 
   function applyStoryTemplate(template: StoryTemplate) {
     setTitle(template.title); setStory(template.story); setShotCount(template.shotCount);
     setStatus(`已载入「${template.label}」剧情模板，可直接修改角色和情节后生成分镜`);
   }
 
-  const effectiveCharacterIds = (shot: Shot) => Array.isArray(shot.character_ids) ? shot.character_ids : characterId ? [characterId] : [];
+  const effectiveCharacterIdsFor = (shot: Shot,boundCharacterId=characterId) => Array.isArray(shot.character_ids) ? shot.character_ids : boundCharacterId ? [boundCharacterId] : [];
+  const effectiveCharacterIds = (shot: Shot) => effectiveCharacterIdsFor(shot);
   const missingCharacterNames = (shot: Shot) => (shot.character_names ?? []).filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
   const sceneKey = (value: string) => value.toLocaleLowerCase("zh-CN").split(/[，。；：,;:|｜]/)[0].replace(/[\s\-_]/g, "").slice(0, 24);
   const sameScene = (left: string, right: string) => { const a=sceneKey(left);const b=sceneKey(right);return Boolean(a&&b&&(a===b||a.includes(b)||b.includes(a))); };
-  const imageReferenceContext = (shot: Shot, previous?: Shot, styleImage?: string) => {
-    const currentIds = effectiveCharacterIds(shot); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
-    const previousCharacterIds=effectiveCharacterIds(previous);const previousIds = new Set(previousCharacterIds); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id));
+  const imageReferenceContextFor = (shot: Shot, previous?: Shot, styleImage?: string,boundCharacterId=characterId) => {
+    const currentIds = effectiveCharacterIdsFor(shot,boundCharacterId); if (!previous) return { characterIds: currentIds, referenceImage: undefined, referenceMode: "identity" as const, styleImage };
+    const previousCharacterIds=effectiveCharacterIdsFor(previous,boundCharacterId);const previousIds = new Set(previousCharacterIds); const entering = currentIds.filter((id) => !previousIds.has(id)); const continuing = currentIds.filter((id) => previousIds.has(id));
     const sceneContinues = sameScene(previous.scene, shot.scene);
     const referenceImage = continuityReferenceImage(currentIds,previousCharacterIds,sceneContinues,previous.image_url);
     return { characterIds: [...entering, ...continuing], referenceImage, referenceMode: sceneContinues ? "scene" as const : "identity" as const, styleImage: styleImage === referenceImage ? undefined : styleImage };
   };
+  const imageReferenceContext=(shot:Shot,previous?:Shot,styleImage?:string)=>imageReferenceContextFor(shot,previous,styleImage);
 
   async function toggleShotCharacter(shot: Shot, id: string, checked: boolean) {
     const current = effectiveCharacterIds(shot); const next = checked ? [...new Set([...current, id])] : current.filter((item) => item !== id);
@@ -202,7 +209,7 @@ export default function StoryboardPage() {
   const isLipSynced = (shot: Shot) => shot.media_status === "lipsync_ready" || /heygen/i.test(shot.video_url || "");
   const requiresLipSync = (shot: Shot) => Boolean(shot.dialogue?.trim() && shot.speaker_character_id);
   const needsProductionRetry = (shot: Shot) => shot.media_status === "failed" || shot.media_status === "lipsync_generating" || Boolean(shot.error_message) || !shot.image_url || !shot.video_url || Boolean(shot.dialogue?.trim()&&!shot.audio_url) || (requiresLipSync(shot)&&!isLipSynced(shot));
-  function qualityReport(items: Shot[], options: { includePerformance?: boolean; includeVisual?: boolean; includeCharacters?: boolean } = {}) {
+  function qualityReport(items: Shot[], options: { includePerformance?: boolean; includeVisual?: boolean; includeCharacters?: boolean; boundCharacterId?:string } = {}) {
     const includePerformance = options.includePerformance ?? true;
     const includeVisual = options.includeVisual ?? true;
     const includeCharacters = options.includeCharacters ?? true;
@@ -234,7 +241,7 @@ export default function StoryboardPage() {
       if (includePerformance && shot.dialogue?.trim() && !hasPerformanceDirection(shot.sound)) critical.push(`${label} 缺少可执行的情绪表演指令（情绪、强度、语速或音量）`);
       if(includePerformance&&shot.dialogue?.trim())performanceShots.push({dialogue:shot.dialogue,performance:shot.sound,shotNumber:shot.shot_number,speakerKey:shot.speaker_character_id});
       if (includeCharacters) {
-        const boundIds = new Set(effectiveCharacterIds(shot)); const expectedNames = shot.character_names ?? [];
+        const boundIds = new Set(effectiveCharacterIdsFor(shot,options.boundCharacterId??characterId)); const expectedNames = shot.character_names ?? [];
         const visibleCharacterCount = uniqueCharacterCount(expectedNames);
         if (visibleCharacterCount > MAX_IDENTITY_REFERENCES || boundIds.size > MAX_IDENTITY_REFERENCES) critical.push(`${label} 有 ${Math.max(visibleCharacterCount,boundIds.size)} 名可见角色，超过图片接口 ${MAX_IDENTITY_REFERENCES} 张身份参考图上限；请拆成主画面和反应镜头，确保每张脸都稳定`);
         const absentNames = expectedNames.filter((name) => !characters.some((character) => character.name.trim().toLocaleLowerCase("zh-CN") === name.trim().toLocaleLowerCase("zh-CN")));
@@ -296,7 +303,7 @@ export default function StoryboardPage() {
     });
   }
 
-  async function lipSyncOne(shot: Shot) {
+  async function lipSyncOne(shot: Shot,projectId=currentProjectId) {
     const mode = lipSyncMode(shot);
     const resuming = shot.media_status === "lipsync_generating";
     let jobId = "";
@@ -320,7 +327,7 @@ export default function StoryboardPage() {
       if(decision==="retry"){setStatus(`镜头 ${shot.shot_number} 的口型任务仍在运行，服务暂时繁忙，正在自动重试 ${consecutivePollFailures}/6…`);continue;}
       if(decision==="error")throw new Error(detail.error||`查询口型同步任务失败（${check.status}）`);
       consecutivePollFailures=0;
-      if(decision==="completed") { const completedShot=detail.shot as Shot;setShots((current) => current.map((item) => item.id === shot.id ? completedShot : item)); return completedShot; }
+      if(decision==="completed") { const completedShot=detail.shot as Shot;syncProjectShot(projectId,completedShot); return completedShot; }
       if(decision==="failed") throw new Error(detail.error || "口型同步失败");
     }
     throw new Error("口型同步仍在处理中，请稍后再试");
@@ -391,6 +398,26 @@ export default function StoryboardPage() {
     } finally { setBatching(false); }
   }
 
+  async function produceQueuedEpisode(project:Project,projectSnapshots:Project[],queueIndex:number,queueTotal:number){
+    const working=project.storyboard_shots.toSorted((a,b)=>a.shot_number-b.shot_number).map((shot)=>({...shot}));let failures=0;
+    const patch=async(shot:Shot,body:Record<string,string|string[]|null>)=>{const updated=await patchProjectShot(project.id,shot.id,body);const index=working.findIndex((item)=>item.id===shot.id);if(index>=0)working[index]=updated;return updated;};
+    const seriesReference=parentClosingImageShot(projectSnapshots,project.id);const seriesStyle=seriesOpeningImageShot(projectSnapshots,project.id);let styleImage=working.find((shot)=>shot.image_url)?.image_url||seriesStyle?.image_url||seriesReference?.image_url;
+    for(let index=0;index<working.length&&!queueCancelRef.current;index++){let shot=working[index];if(shot.image_url)continue;setStatus(`全季制作 ${queueIndex}/${queueTotal} · ${project.title} · 生成图片 ${index+1}/${working.length}`);try{await patch(shot,{status:"image_generating",error:""});const prior=working.slice(0,index).toReversed().find((item)=>item.image_url)||(index===0?seriesReference:undefined);const context=imageReferenceContextFor(shot,prior,styleImage,project.character_id||"");const response=await fetch("/api/image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt:shot.image_prompt,aspectRatio:"9:16",...context,batch:true})});const data=await response.json();if(!response.ok)throw new Error(data.error);shot=await patch(shot,{imageUrl:data.imageUrl,status:"image_ready",error:""});styleImage||=data.imageUrl;working[index]=shot;}catch(error){failures++;working[index]=await patch(shot,{status:"failed",error:error instanceof Error?error.message:"图片生成失败"});}}
+    for(let index=0;index<working.length&&!queueCancelRef.current;index++){let shot=working[index];if(!shot.image_url||shot.video_url)continue;try{if(shot.dialogue?.trim()&&!shot.audio_url){setStatus(`全季制作 ${queueIndex}/${queueTotal} · ${project.title} · 情绪配音 ${index+1}/${working.length}`);const speaker=characters.find((character)=>character.id===shot.speaker_character_id);const voiceResponse=await fetch(`/api/storyboard/shots/${shot.id}/voice`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voiceId:speaker?.voice_id||shot.voice_id,fallbackVoiceId:voiceId,language:speaker?.voice_language||shot.voice_language||voiceLanguage,batch:true})});const voiceData=await voiceResponse.json();if(!voiceResponse.ok)throw new Error(voiceData.error);shot=voiceData.shot as Shot;working[index]=shot;syncProjectShot(project.id,shot);}setStatus(`全季制作 ${queueIndex}/${queueTotal} · ${project.title} · 生成视频 ${index+1}/${working.length}`);await patch(shot,{status:"video_generating",error:""});const response=await fetch("/api/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider:"xai",prompt:shot.video_prompt,image:shot.image_url,duration:Math.min(15,shot.duration_seconds),aspectRatio:"9:16",resolution:videoResolution,characterIds:effectiveCharacterIdsFor(shot,project.character_id||""),batch:true})});const data=await response.json();if(!response.ok)throw new Error(data.error);let videoUrl="";for(let attempt=0;attempt<120&&!queueCancelRef.current;attempt++){await new Promise((resolve)=>setTimeout(resolve,5000));const check=await fetch(`/api/status?requestId=${encodeURIComponent(data.requestId)}`,{cache:"no-store"});const detail=await check.json();if(!check.ok)throw new Error(detail.error);if(detail.status==="done"){videoUrl=detail.videoUrl;break;}if(["failed","expired"].includes(detail.status))throw new Error("视频生成失败，积分已退还");}if(!videoUrl&&!queueCancelRef.current)throw new Error("视频仍在处理中，请稍后恢复队列");if(videoUrl)working[index]=await patch(shot,{videoUrl,status:"completed",error:""});}catch(error){failures++;working[index]=await patch(shot,{status:"failed",error:error instanceof Error?error.message:"视频生成失败"});}}
+    const voiceShots=working.filter((shot)=>shot.dialogue?.trim()&&!shot.audio_url);for(let index=0;index<voiceShots.length&&!queueCancelRef.current;index++){const shot=voiceShots[index];setStatus(`全季制作 ${queueIndex}/${queueTotal} · ${project.title} · 补充配音 ${index+1}/${voiceShots.length}`);try{const speaker=characters.find((character)=>character.id===shot.speaker_character_id);const response=await fetch(`/api/storyboard/shots/${shot.id}/voice`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voiceId:speaker?.voice_id||shot.voice_id,fallbackVoiceId:voiceId,language:speaker?.voice_language||shot.voice_language||voiceLanguage,batch:true})});const data=await response.json();if(!response.ok)throw new Error(data.error);const updated=data.shot as Shot;const workingIndex=working.findIndex((item)=>item.id===shot.id);if(workingIndex>=0)working[workingIndex]=updated;syncProjectShot(project.id,updated);}catch(error){failures++;await patch(shot,{status:"failed",error:error instanceof Error?error.message:"配音生成失败"});}}
+    const lipSyncShots=working.filter((shot)=>shot.video_url&&shot.audio_url&&requiresLipSync(shot)&&!isLipSynced(shot));for(let index=0;index<lipSyncShots.length&&!queueCancelRef.current;index++){const shot=lipSyncShots[index];setStatus(`全季制作 ${queueIndex}/${queueTotal} · ${project.title} · 同步口型 ${index+1}/${lipSyncShots.length}`);try{const completed=await lipSyncOne(shot,project.id);const workingIndex=working.findIndex((item)=>item.id===shot.id);if(workingIndex>=0)working[workingIndex]=completed;}catch(error){failures++;await patch(shot,{status:"failed",error:error instanceof Error?error.message:"口型同步失败"});}}
+    return {working,failures,incomplete:working.filter(needsProductionRetry).length};
+  }
+
+  async function runSeriesProductionQueue(resume=false){
+    if(batching)return;const sourceIds=resume?savedQueueIds:activeSeries.filter((project)=>productionSummary(project.storyboard_shots).incomplete>0).map((project)=>project.id);const queue=sourceIds.map((id)=>projectsWithActiveShots.find((project)=>project.id===id)).filter((project):project is Project=>Boolean(project));
+    if(!queue.length){localStorage.removeItem(SERIES_QUEUE_STORAGE_KEY);setSavedQueueIds([]);return setStatus("当前全季制作队列已完成");}
+    for(const project of queue){const quality=qualityReport(project.storyboard_shots,{boundCharacterId:project.character_id||""});if(quality.critical.length)return setStatus(`全季批量制作已暂停在《${project.title}》：${quality.critical.slice(0,3).join("；")}。请先打开该集执行 AI 修复或补齐角色参考图。`);}
+    const estimate=estimateProductionCost(queue.flatMap((project)=>project.storyboard_shots),videoResolution);if(!window.confirm(`将自动按顺序制作 ${queue.length} 集，只处理未完成内容：${estimate.imageCount} 张图片、${estimate.videoCount} 段 ${videoResolution} 视频、${estimate.voiceCount} 段配音、${estimate.lipSyncCount} 段口型同步。预计最多消耗 ${estimate.credits} 积分、xAI 约 $${estimate.xaiUsd.toFixed(2)}、HeyGen 约 $${estimate.heygenUsd.toFixed(2)}。\n\n过程可能持续较长时间，请保持页面打开；可随时点击“完成当前镜头后停止”，之后再恢复。确定开始吗？`))return;
+    queueCancelRef.current=false;setBatching(true);setQueueRunning(true);let completedEpisodes=0;let totalFailures=0;let snapshots=projectsWithActiveShots;let remainingIds=queue.map((project)=>project.id);const retryIds:string[]=[];const saveQueue=()=>{localStorage.setItem(SERIES_QUEUE_STORAGE_KEY,JSON.stringify({projectIds:remainingIds,resolution:videoResolution,updatedAt:new Date().toISOString()}));setSavedQueueIds([...remainingIds]);};saveQueue();
+    try{for(let index=0;index<queue.length&&!queueCancelRef.current;index++){const project=snapshots.find((item)=>item.id===queue[index].id)??queue[index];const result=await produceQueuedEpisode(project,snapshots,index+1,queue.length);totalFailures+=result.failures;if(result.incomplete)retryIds.push(project.id);else completedEpisodes++;snapshots=snapshots.map((item)=>item.id===project.id?{...item,storyboard_shots:result.working}:item);setProjects(snapshots);remainingIds=queueCancelRef.current?[...new Set([...retryIds,...queue.slice(index).map((item)=>item.id)])]:[...retryIds,...queue.slice(index+1).map((item)=>item.id)];saveQueue();}if(queueCancelRef.current){setStatus(`全季制作已安全停止：本次完成 ${completedEpisodes} 集，剩余 ${remainingIds.length} 集可稍后恢复`);}else if(retryIds.length){remainingIds=retryIds;saveQueue();setStatus(`全季队列已处理完成：${completedEpisodes} 集已就绪，${retryIds.length} 集仍有 ${totalFailures} 个失败或未完成任务，进度已保存，可点击恢复全季制作`);}else{localStorage.removeItem(SERIES_QUEUE_STORAGE_KEY);setSavedQueueIds([]);setStatus(`全季 ${completedEpisodes} 集图片、情绪配音、视频和口型同步已全部制作完成，请运行质量验收`);}}catch(error){saveQueue();setStatus(`全季制作中断，进度已保存：${error instanceof Error?error.message:"未知错误"}。稍后可点击恢复队列。`);}finally{setBatching(false);setQueueRunning(false);queueCancelRef.current=false;}
+  }
+
   function retryFailedTasks() {
     const failedIds = new Set(shots.filter(needsProductionRetry).map((shot) => shot.id));
     if (!failedIds.size) return setStatus("当前没有失败任务");
@@ -422,14 +449,6 @@ export default function StoryboardPage() {
 
   function locateSeriesFinding(projectId?:string,message?:string){const project=activeSeries.find((item)=>item.id===projectId);if(project)openProject(project);if(message)setStatus(message);}
 
-  function continueSeriesProductionQueue() {
-    if (!nextIncompleteProject) return setStatus("当前已加载的全季镜头都已制作完成");
-    const remainingProjects=activeSeries.filter((project)=>productionSummary(project.storyboard_shots).incomplete>0);
-    const estimate=estimateProductionCost(remainingProjects.flatMap((project)=>project.storyboard_shots),videoResolution);
-    openProject(nextIncompleteProject);
-    setStatus(`全季制作队列还剩 ${remainingProjects.length} 集：缺 ${estimate.imageCount} 张图片、${estimate.videoCount} 段视频、${estimate.voiceCount} 段配音、${estimate.lipSyncCount} 段口型同步；预计最多 ${estimate.credits} 积分、xAI 约 $${estimate.xaiUsd.toFixed(2)}、HeyGen 约 $${estimate.heygenUsd.toFixed(2)}。已定位到下一集，请点击“一键生成整集漫剧”，系统仍会在扣费前逐集确认。`);
-  }
-
   function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterIds: effectiveCharacterIds(shot) })); router.push("/dashboard"); }
 
   function openProject(project: Project) {
@@ -454,7 +473,7 @@ export default function StoryboardPage() {
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
-        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={continueSeriesProductionQueue}>继续全季制作队列</button>}<button type="button" className="series-audit-button" onClick={runSeriesQualityAudit}>全季质量验收</button><button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{queueRunning?<button type="button" className="series-stop-queue" onClick={()=>{queueCancelRef.current=true;setStatus("已请求停止，将在当前镜头完成后安全保存进度");}}>完成当前镜头后停止</button>:savedQueueIds.length?<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue(true)}>恢复全季制作 · {savedQueueIds.length} 集</button>:nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={()=>void runSeriesProductionQueue()}>一键批量制作全季</button>}<button type="button" className="series-audit-button" onClick={runSeriesQualityAudit}>全季质量验收</button><button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" disabled={queueRunning} className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
         {seriesAudit&&<section className={`series-audit ${seriesAudit.passed?"passed":"needs-work"}`}><header><div><b>全季质量验收 · {seriesAudit.score} 分</b><small>{seriesAudit.criticalCount} 项必须修复 · {seriesAudit.warningCount} 项建议改进</small></div><button type="button" onClick={()=>setSeriesAudit(null)}>收起</button></header>{seriesAudit.passed?<p>剧情链、角色档案、情绪配音、声音一致性、口型同步和媒体完整性均通过。</p>:<div>{seriesAudit.findings.slice(0,16).map((finding,index)=><button type="button" className={finding.level} key={`${finding.code}-${finding.projectId}-${finding.shotNumber}-${index}`} onClick={()=>locateSeriesFinding(finding.projectId,finding.message)}><b>{finding.level==="critical"?"必须修复":"建议"}</b><span>{finding.message}</span></button>)}{seriesAudit.findings.length>16&&<small>另有 {seriesAudit.findings.length-16} 项已写入全季制作包的 quality_audit。</small>}</div>}</section>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
