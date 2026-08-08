@@ -8,7 +8,7 @@ import { supabase } from "@/app/lib/supabase";
 import { episodeAudioPlan } from "@/app/lib/episodeAudioPlan";
 import { episodeSoundCues, soundEffectFilter, type EpisodeSoundCue } from "@/app/lib/episodeSoundPlan";
 import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
-import { resolvedShotDuration } from "@/app/lib/episodeTiming";
+import { mediaProbeNeeded, resolvedShotDuration } from "@/app/lib/episodeTiming";
 import { episodeMixFilters } from "@/app/lib/episodeMixPlan";
 import { episodeVideoFades } from "@/app/lib/episodeTransitions";
 import { flatPerformanceRun } from "@/app/lib/performanceArc";
@@ -33,6 +33,7 @@ export default function EpisodePage() {
   const params = useParams<{ id:string }>(); const router = useRouter();
   const [project,setProject] = useState<Project|null>(null); const [index,setIndex] = useState(0); const [playing,setPlaying] = useState(false); const [elapsed,setElapsed] = useState(0); const [error,setError] = useState(""); const [exporting,setExporting]=useState(false); const [exportProgress,setExportProgress]=useState(0); const [exportStatus,setExportStatus]=useState(""); const [mediaDurations,setMediaDurations]=useState<Record<string,number>>({}); const [captionTracks,setCaptionTracks]=useState<Record<string,CaptionCue[]>>({});
   const videoRef = useRef<HTMLVideoElement>(null); const voiceAudioRef = useRef<HTMLAudioElement>(null); const ambientAudioRef = useRef<HTMLAudioElement>(null);
+  const measuredVideoUrls=useRef<Record<string,string>>({});
   const shots = useMemo(() => project?.storyboard_shots ?? [], [project]); const shot = shots[index];
   const shotDuration=(item:Shot)=>resolvedShotDuration(item.duration_seconds,mediaDurations[item.id]);
   const subtitleDuration = (item: Shot) => { const timed = Number(item.subtitle_end_ms ?? 0) - Number(item.subtitle_start_ms ?? 0); return timed > 0 ? Math.min(shotDuration(item), timed / 1000) : shotDuration(item); };
@@ -50,7 +51,7 @@ export default function EpisodePage() {
   const episodeReady=shots.length>0&&missingVisualCount===0&&missingVoiceCount===0&&flatPerformanceCount===0&&repetitivePerformanceCount===0&&unsyncedVoiceCount===0;
 
   useEffect(() => { supabase.auth.getUser().then(async ({data}) => { if(!data.user){router.replace("/login");return;} const response=await fetch(`/api/storyboard/projects/${params.id}?includeSources=1`,{cache:"no-store"}); const body=await response.json(); if(!response.ok){setError(body.error);return;} setProject(body.project); }); },[params.id,router]);
-  useEffect(() => { const probes=shots.filter((item)=>item.video_url&&!mediaDurations[item.id]).map((item)=>{const video=document.createElement("video");video.preload="metadata";video.onloadedmetadata=()=>{if(Number.isFinite(video.duration)&&video.duration>0)setMediaDurations((current)=>({...current,[item.id]:video.duration}));};video.src=item.video_url!;return video;});return()=>probes.forEach((video)=>{video.removeAttribute("src");video.load();});},[shots,mediaDurations]);
+  useEffect(() => { const measuredUrls=measuredVideoUrls.current;const probes=shots.filter((item)=>mediaProbeNeeded(measuredUrls[item.id],item.video_url)).map((item)=>{const video=document.createElement("video");const url=item.video_url!;const probe={video,id:item.id,url,completed:false};measuredUrls[item.id]=url;video.preload="metadata";video.onloadedmetadata=()=>{probe.completed=true;if(measuredUrls[item.id]===url&&Number.isFinite(video.duration)&&video.duration>0)setMediaDurations((current)=>({...current,[item.id]:video.duration}));};video.onerror=()=>{probe.completed=true;if(measuredUrls[item.id]===url)delete measuredUrls[item.id];};video.src=url;return probe;});return()=>probes.forEach((probe)=>{if(!probe.completed&&measuredUrls[probe.id]===probe.url)delete measuredUrls[probe.id];probe.video.removeAttribute("src");probe.video.load();});},[shots]);
   useEffect(() => { const media:HTMLMediaElement[]=[];for(const item of shots.slice(index+1,index+3)){if(item.video_url){const video=document.createElement("video");video.preload="auto";video.src=item.video_url;video.load();media.push(video);}for(const audio of [item.audio_url,hasEmbeddedVoice(item)?item.source_video_url:undefined])if(audio){const element=document.createElement("audio");element.preload="auto";element.src=audio;element.load();media.push(element);}}return()=>media.forEach((element)=>{element.removeAttribute("src");element.load();});},[shots,index]);
   useEffect(() => { let active=true;Promise.all(shots.filter((item)=>item.audio_url).map(async(item)=>{try{const timingsUrl=item.audio_url!.replace(/\.mp3(?:\?.*)?$/,".timings.json");const response=await fetch(`/api/media?url=${encodeURIComponent(timingsUrl)}`,{cache:"no-store"});if(!response.ok)return;const data=await response.json() as {cues?:CaptionCue[]};if(active&&data.cues?.length)setCaptionTracks((current)=>({...current,[item.id]:data.cues!}));}catch{}}));return()=>{active=false;};},[shots]);
   useEffect(() => {
