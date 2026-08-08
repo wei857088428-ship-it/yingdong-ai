@@ -44,7 +44,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     if (polished.length !== shots.length) throw new Error("AI 返回的镜头数量不完整");
     if (new Set(returnedNumbers).size !== shots.length || expectedNumbers.some((number) => !returnedNumbers.includes(number))) throw new Error("AI 返回的镜头编号重复或缺失，本次未修改分镜");
     if(!hasDistinctDramaticFunctions(polished.map((item)=>String(item.dramatic_function??""))))throw new Error("AI 返回的剧情推进功能缺失或重复，本次未修改分镜");
-    if(!hasExpressivePerformanceArc(polished.map((item)=>({dialogue:item.dialogue,performance:item.sound}))))throw new Error("AI 返回了连续三段相同的平直情绪表演，本次未修改分镜");
+    if(!hasExpressivePerformanceArc(polished.map((item)=>({dialogue:item.dialogue,performance:item.sound,speakerKey:item.speaker_name}))))throw new Error("AI 返回了同一角色连续三段相同的平直情绪表演，本次未修改分镜");
     const { data: characterRows } = await supabase.from("characters").select("id,name,voice_id,voice_language").eq("user_id", user.id);
     const characters = (characterRows ?? []) as Character[];
     const profiles = new Map<string, "female" | "male">();

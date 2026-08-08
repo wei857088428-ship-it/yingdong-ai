@@ -1,4 +1,4 @@
-type PerformanceBeat = { dialogue?: string; performance?: string };
+type PerformanceBeat = { dialogue?: string; performance?: string; speakerKey?: string | null };
 
 export function performanceSignature(value?: string) {
   const text = String(value ?? "").toLocaleLowerCase("zh-CN");
@@ -23,12 +23,19 @@ export function performanceSignature(value?: string) {
 
 export function flatPerformanceRun(items: PerformanceBeat[], minimumRun = 3) {
   const spoken = items.filter((item) => String(item.dialogue ?? "").trim());
-  let start = 0;
-  for (let index = 1; index <= spoken.length; index++) {
-    const changed = index === spoken.length || performanceSignature(spoken[index].performance) !== performanceSignature(spoken[start].performance);
-    if (!changed) continue;
-    if (index - start >= minimumRun) return { startIndex: start, endIndex: index - 1, signature: performanceSignature(spoken[start].performance) };
-    start = index;
+  const bySpeaker = new Map<string, Array<{ item: PerformanceBeat; spokenIndex: number }>>();
+  spoken.forEach((item, spokenIndex) => {
+    const key = String(item.speakerKey ?? "").trim().toLocaleLowerCase("zh-CN") || "__narrator__";
+    bySpeaker.set(key, [...(bySpeaker.get(key) ?? []), { item, spokenIndex }]);
+  });
+  for (const [speakerKey, beats] of bySpeaker) {
+    let start = 0;
+    for (let index = 1; index <= beats.length; index++) {
+      const changed = index === beats.length || performanceSignature(beats[index].item.performance) !== performanceSignature(beats[start].item.performance);
+      if (!changed) continue;
+      if (index - start >= minimumRun) return { startIndex: beats[start].spokenIndex, endIndex: beats[index - 1].spokenIndex, spokenIndexes: beats.slice(start, index).map((beat) => beat.spokenIndex), signature: performanceSignature(beats[start].item.performance), speakerKey };
+      start = index;
+    }
   }
   return undefined;
 }
