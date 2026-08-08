@@ -14,6 +14,7 @@ import { lipSyncPollDecision } from "@/app/lib/lipsyncPolling";
 import { hasPerformanceDirection } from "@/app/lib/performanceDirection";
 import { parentClosingImageShot, seriesOpeningImageShot } from "@/app/lib/seriesImageReference";
 import { flatPerformanceRun } from "@/app/lib/performanceArc";
+import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -268,7 +269,8 @@ export default function StoryboardPage() {
       const outputSeconds=Math.min(30,Math.max(targetSeconds,source.duration));const frames = Math.ceil(outputSeconds * rate); const bytes = new ArrayBuffer(44 + frames * channels * 2); const view = new DataView(bytes);
       const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
       write(0,"RIFF"); view.setUint32(4,36 + frames * channels * 2,true); write(8,"WAVE"); write(12,"fmt "); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,channels,true); view.setUint32(24,rate,true); view.setUint32(28,rate * channels * 2,true); view.setUint16(32,channels * 2,true); view.setUint16(34,16,true); write(36,"data"); view.setUint32(40,frames * channels * 2,true);
-      let offset = 44; for (let frame = 0; frame < frames; frame++) { const sourceFrame = Math.floor(frame * source.sampleRate / rate); let sample = 0; if (sourceFrame < source.length) for (let channel = 0; channel < source.numberOfChannels; channel++) sample += source.getChannelData(channel)[sourceFrame] / source.numberOfChannels; sample = Math.max(-1,Math.min(1,sample)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; }
+      const pcm=resampleMonoPcm16(Array.from({length:source.numberOfChannels},(_,channel)=>source.getChannelData(channel)),source.sampleRate,rate,frames);
+      let offset = 44; for (const sample of pcm) { view.setInt16(offset,sample,true);offset+=2; }
       const data = new Uint8Array(bytes); let binary = ""; for (let i = 0; i < data.length; i += 0x8000) binary += String.fromCharCode(...data.subarray(i,i + 0x8000)); return {base64:btoa(binary),audioSeconds:source.duration};
     } finally { await context.close(); }
   }
