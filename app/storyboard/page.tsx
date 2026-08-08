@@ -18,6 +18,8 @@ import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
 import { boundedEpisodePlanCount, SERIES_PLAN_COUNTS } from "@/app/lib/seriesPlanning";
 import { buildSeriesPath } from "@/app/lib/seriesNavigation";
 import { productionSummary, seriesProductionSummary } from "@/app/lib/seriesProduction";
+import { buildSeriesExport, safeSeriesFilename } from "@/app/lib/seriesExport";
+import { estimateProductionCost } from "@/app/lib/productionEstimate";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -344,10 +346,7 @@ export default function StoryboardPage() {
     const targetShots = retryShotIds ? shots.filter((shot) => retryShotIds.has(shot.id)) : shots;
     const quality = qualityReport(targetShots);
     if (quality.critical.length) return setStatus(`整集制作已暂停：${quality.critical.slice(0, 3).join("；")}`);
-    const imageCount = targetShots.filter((shot) => !shot.image_url).length; const videoCount = targetShots.filter((shot) => !shot.video_url).length; const voiceCount = targetShots.filter((shot) => shot.dialogue?.trim() && !shot.audio_url).length; const lipSyncCount = targetShots.filter((shot) => requiresLipSync(shot) && !isLipSynced(shot)).length;
-    const videoCreditCost=videoResolution==="720p"?112:80;const estimatedCredits = imageCount * 20 + videoCount * videoCreditCost + voiceCount * 2;
-    const estimatedXaiVideo=targetShots.filter((shot)=>!shot.video_url).reduce((sum,shot)=>sum+Math.min(15,shot.duration_seconds)*(videoResolution==="720p"?.07:.05),0);
-    const estimatedHeyGen = targetShots.filter((shot) => requiresLipSync(shot) && !isLipSynced(shot)).reduce((sum, shot) => sum + shot.duration_seconds * (lipSyncMode(shot) === "precision" ? 0.0667 : 0.0333), 0);
+    const estimate=estimateProductionCost(targetShots,videoResolution);const {imageCount,videoCount,voiceCount,lipSyncCount}=estimate;const estimatedCredits=estimate.credits;const estimatedXaiVideo=estimate.xaiUsd;const estimatedHeyGen=estimate.heygenUsd;
     if (!imageCount && !videoCount && !voiceCount && !lipSyncCount) return setStatus("所选任务已经全部完成");
     const actionName = retryShotIds ? "重试失败任务" : "一键生成整集";
     const qualityNote = quality.warnings.length ? `\n\n制作检查 ${quality.score} 分，发现 ${quality.warnings.length} 项建议：\n${quality.warnings.slice(0, 4).join("\n")}` : "\n\n制作检查 100 分，未发现明显问题。";
@@ -406,6 +405,23 @@ export default function StoryboardPage() {
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = `${currentTitle || "影动AI分镜"}.srt`; link.click(); URL.revokeObjectURL(url); setStatus("SRT 字幕已导出");
   }
 
+  function exportSeriesPackage() {
+    if (!activeSeries.length) return setStatus("当前没有可导出的连续剧集");
+    const manifest = buildSeriesExport(activeSeries,characters);
+    const url = URL.createObjectURL(new Blob([`\uFEFF${JSON.stringify(manifest,null,2)}`],{type:"application/json;charset=utf-8"}));
+    const link = document.createElement("a"); link.href=url; link.download=safeSeriesFilename(activeSeries[0]?.title||currentTitle); link.click();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    setStatus(`已导出 ${manifest.series.episodes} 集全季制作包，包含角色设定、分镜、提示词、媒体链接、完成状态与逐集 SRT 字幕`);
+  }
+
+  function continueSeriesProductionQueue() {
+    if (!nextIncompleteProject) return setStatus("当前已加载的全季镜头都已制作完成");
+    const remainingProjects=activeSeries.filter((project)=>productionSummary(project.storyboard_shots).incomplete>0);
+    const estimate=estimateProductionCost(remainingProjects.flatMap((project)=>project.storyboard_shots),videoResolution);
+    openProject(nextIncompleteProject);
+    setStatus(`全季制作队列还剩 ${remainingProjects.length} 集：缺 ${estimate.imageCount} 张图片、${estimate.videoCount} 段视频、${estimate.voiceCount} 段配音、${estimate.lipSyncCount} 段口型同步；预计最多 ${estimate.credits} 积分、xAI 约 $${estimate.xaiUsd.toFixed(2)}、HeyGen 约 $${estimate.heygenUsd.toFixed(2)}。已定位到下一集，请点击“一键生成整集漫剧”，系统仍会在扣费前逐集确认。`);
+  }
+
   function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterIds: effectiveCharacterIds(shot) })); router.push("/dashboard"); }
 
   function openProject(project: Project) {
@@ -430,7 +446,7 @@ export default function StoryboardPage() {
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
-        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={()=>openProject(nextIncompleteProject)}>定位下一集未完成内容</button>}</div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={continueSeriesProductionQueue}>继续全季制作队列</button>}<button type="button" className="series-export-package" onClick={exportSeriesPackage}>导出全季制作包</button></div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
