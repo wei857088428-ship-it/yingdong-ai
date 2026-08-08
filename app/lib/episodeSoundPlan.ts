@@ -25,6 +25,16 @@ export function soundDescription(value?: string) {
   return cleanSound(labelled ?? raw);
 }
 
+export function soundOffsetSeconds(sound: string, durationSeconds: number) {
+  const duration = Math.max(0, Number(durationSeconds) || 0);
+  if (!duration) return 0;
+  const explicit = sound.match(/(?:第\s*)?(\d+(?:\.\d+)?)\s*(?:秒(?:后|处|时)?|seconds?(?:\s+(?:later|in))?)/i)?.[1];
+  if (explicit) return Math.min(Math.max(0, duration - 0.2), Math.max(0, Number(explicit)));
+  if (/结尾|末尾|最后|临近结束|end of (?:the )?shot/i.test(sound)) return Math.max(0, duration - Math.min(0.8, duration * 0.2));
+  if (/中段|中间|半途|半程|mid(?:dle)?(?: of (?:the )?shot)?/i.test(sound)) return duration * 0.5;
+  return 0;
+}
+
 export function episodeSoundCues(shots: EpisodeSoundShot[], limit = 6): EpisodeSoundCue[] {
   let cursor = 0;
   const seen = new Set<string>();
@@ -33,6 +43,7 @@ export function episodeSoundCues(shots: EpisodeSoundShot[], limit = 6): EpisodeS
   shots.forEach((shot, shotIndex) => {
     const sound = soundDescription(shot.sound);
     const duration = Math.max(0, Number(shot.duration_seconds) || 0);
+    const offset = soundOffsetSeconds(sound, duration);
     const normalized = sound.toLocaleLowerCase();
     if (sound.length >= 2 && !SILENCE.test(sound) && !seen.has(normalized)) {
       seen.add(normalized);
@@ -40,8 +51,8 @@ export function episodeSoundCues(shots: EpisodeSoundShot[], limit = 6): EpisodeS
         shotIndex,
         shotNumber: shot.shot_number,
         query: `cinematic sound effect only, no music: ${sound}`,
-        startSeconds: cursor,
-        durationSeconds: Math.min(2.4, Math.max(0.8, duration)),
+        startSeconds: cursor + offset,
+        durationSeconds: Math.max(0.2, Math.min(2.4, duration - offset)),
         score: EVENT_SOUND.test(sound) ? 2 : 1,
       });
     }
