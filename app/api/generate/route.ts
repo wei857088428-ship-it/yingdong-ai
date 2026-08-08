@@ -6,20 +6,37 @@ import { charactersPrompt, getCharacters } from "@/app/lib/characters";
 
 type GenerateBody = { provider?: "xai" | "kling"; prompt?: string; image?: string; duration?: number; aspectRatio?: string; resolution?: string; conversationId?: string; characterId?: string; characterIds?: string[]; batch?: boolean };
 
-const XAI_VIDEO_PROMPT_LIMIT = 4000;
+const XAI_VIDEO_PROMPT_BYTE_LIMIT = 3900;
+
+function utf8Length(value: string) { return new TextEncoder().encode(value).length; }
+
+function takeUtf8(value: string, maxBytes: number, fromEnd = false) {
+  const characters = Array.from(value);
+  if (fromEnd) characters.reverse();
+  const kept: string[] = [];
+  let bytes = 0;
+  for (const character of characters) {
+    const next = utf8Length(character);
+    if (bytes + next > maxBytes) break;
+    kept.push(character);
+    bytes += next;
+  }
+  if (fromEnd) kept.reverse();
+  return kept.join("");
+}
 
 function fitVideoPrompt(prompt: string, identityPrompt: string) {
   const combined = prompt + identityPrompt;
-  if (combined.length <= XAI_VIDEO_PROMPT_LIMIT) return combined;
+  if (utf8Length(combined) <= XAI_VIDEO_PROMPT_BYTE_LIMIT) return combined;
 
   // Storyboard prompts repeat continuity state in the middle. Keep the opening
   // action/camera direction, the closing lip-sync contract, and character lock.
   const marker = "\n[重复的连续性说明已压缩]\n";
-  const identity = identityPrompt.slice(-Math.min(identityPrompt.length, 900));
-  const available = Math.max(800, XAI_VIDEO_PROMPT_LIMIT - identity.length - marker.length);
+  const identity = takeUtf8(identityPrompt, 700, true);
+  const available = Math.max(1200, XAI_VIDEO_PROMPT_BYTE_LIMIT - utf8Length(identity) - utf8Length(marker));
   const headLength = Math.ceil(available * 0.62);
   const tailLength = available - headLength;
-  return prompt.slice(0, headLength) + marker + prompt.slice(-tailLength) + identity;
+  return takeUtf8(prompt, headLength) + marker + takeUtf8(prompt, tailLength, true) + identity;
 }
 
 export async function POST(request: Request) {
