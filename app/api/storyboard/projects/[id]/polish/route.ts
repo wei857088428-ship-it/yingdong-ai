@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/app/lib/auth";
 import { createServerSupabaseClient } from "@/app/lib/supabaseServer";
 import { finishUsage, reserveUsage } from "@/app/lib/usage";
-import { withContinuityPrompt } from "@/app/lib/storyboardContinuity";
+import { continuityLedger, withContinuityPrompt } from "@/app/lib/storyboardContinuity";
 import { originalVideoUrl } from "@/app/lib/lipsyncSource";
 import { normalizeSpeakerName, stableSpeakerVoice, type SpeakerVoiceProfile } from "@/app/lib/speakerVoice";
 import { normalizeVoiceId } from "@/app/lib/voiceCatalog";
@@ -26,16 +26,19 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   if (!apiKey) return NextResponse.json({ error: "AI 服务尚未配置" }, { status: 503 });
   const { id } = await params; const supabase = await createServerSupabaseClient(); let eventId = "";
   try {
-    const { data: project } = await supabase.from("storyboard_projects").select("id,title,source_text,storyboard_shots(*)").eq("id", id).eq("user_id", user.id).maybeSingle();
+    const { data: project } = await supabase.from("storyboard_projects").select("id,title,source_text,parent_project_id,storyboard_shots(*)").eq("id", id).eq("user_id", user.id).maybeSingle();
     if (!project) return NextResponse.json({ error: "没有找到这个分镜项目" }, { status: 404 });
     const shots = (project.storyboard_shots ?? []).toSorted((a, b) => a.shot_number - b.shot_number);
     if (!shots.length) return NextResponse.json({ error: "项目还没有分镜" }, { status: 400 });
+    let previousEpisodeClosingShot:{scene?:string;action?:string;dialogue?:string;speaker_name?:string;character_names?:string[]|null;continuity_state?:string;image_prompt?:string;video_prompt?:string}|undefined;
+    if(project.parent_project_id){const {data:parent}=await supabase.from("storyboard_projects").select("storyboard_shots(*)").eq("id",project.parent_project_id).eq("user_id",user.id).maybeSingle();previousEpisodeClosingShot=(parent?.storyboard_shots??[]).toSorted((a,b)=>b.shot_number-a.shot_number)[0];}
+    const previousEpisodeLedger=continuityLedger(previousEpisodeClosingShot);
     const schema = { type: "object", additionalProperties: false, required: ["shots"], properties: { shots: { type: "array", minItems: shots.length, maxItems: shots.length, items: { type: "object", additionalProperties: false, required: ["shot_number","dialogue","sound","duration_seconds","speaker_name","speaker_voice","dramatic_function","causal_link","continuity_state"], properties: { shot_number: { type: "integer" }, dialogue: { type: "string" }, sound: { type: "string" }, duration_seconds: { type: "integer", minimum: 2, maximum: 15 }, speaker_name: { type: "string" }, speaker_voice: { type: "string", enum: ["female","male","neutral"] }, dramatic_function: { type: "string", minLength: 15, description: "Current goal; this shot's obstacle or decision; concrete irreversible end change; consequence the next shot must address. Must differ from adjacent shots." }, causal_link: { type: "string", minLength: 10, description: "Concrete visible prior cause and why it directly triggers this shot; for shot 1, the opening trigger and immediate objective." }, continuity_state: { type: "string", minLength: 20, description: "Exact end-of-shot location, time, character positions/facing, clothing, injuries, held props, lighting, and final pose; inherit every unchanged fact from the prior shot." } } } } } };
     const usage = await reserveUsage(user.id, "chat"); eventId = usage.eventId;
     const response = await fetch("https://api.x.ai/v1/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ model: "grok-4.5", temperature: 0.25, max_tokens: 12000, response_format: { type: "json_schema", json_schema: { name: "polished_dialogue", strict: true, schema } }, messages: [
-      { role: "system", content: "先检查整集目标、升级阻碍、关键选择、直接后果和结尾悬念，再为每个镜头同时重建 dramatic_function、causal_link 和 continuity_state。dramatic_function 必须写清人物当前目标、本镜阻碍或选择、结尾具体且不可逆的变化、下一镜必须处理的直接结果；相邻镜头不得重复功能，没有推进的镜头必须重写。causal_link 具体写出上一镜可见事件为何直接触发本镜动作，第1镜写开场触发事件与人物当下目标，禁止只写‘剧情继续’。continuity_state 写清镜头结束时的地点、时间、所有人物站位与朝向、服装、伤势、手持道具、光线和最终姿势。上一镜没有被可见事件改变的事实必须逐项原样继承，不能重置或遗漏。" },
+      { role: "system", content: `先检查整集目标、升级阻碍、关键选择、直接后果和结尾悬念，再为每个镜头同时重建 dramatic_function、causal_link 和 continuity_state。dramatic_function 必须写清人物当前目标、本镜阻碍或选择、结尾具体且不可逆的变化、下一镜必须处理的直接结果；相邻镜头不得重复功能，没有推进的镜头必须重写。causal_link 具体写出上一镜可见事件为何直接触发本镜动作，第1镜写开场触发事件与人物当下目标，禁止只写‘剧情继续’。continuity_state 写清镜头结束时的地点、时间、所有人物站位与朝向、服装、伤势、手持道具、光线和最终姿势。上一镜没有被可见事件改变的事实必须逐项原样继承，不能重置或遗漏。${previousEpisodeLedger?`这是续集，上一集最后一镜状态账本如下。本集第1镜必须以此为起始状态逐项继承，只有第1镜画面明确发生的动作才允许改变：\n${previousEpisodeLedger}`:""}` },
       { role: "system", content: `你是竖屏漫剧对白导演。逐镜修复对白和表演指令，但不能改变事件、人物关系、地点、道具和结局。要求：每镜只允许一个人说话；台词口语化、有明确目的和潜台词；不能复述画面；每秒最多约4个汉字；相邻镜头情绪变化必须由事件触发。dialogue 无需说话时可为空。speaker_name 填唯一说话角色的准确姓名，旁白或无人说话填空；speaker_voice 根据原故事明确身份填 female、male 或 neutral，同一角色跨镜保持一致，不凭姓名刻板猜测。sound 必须以“表演：”开头，写清主情绪、强度1-5、语速、音量、停顿和潜台词，再写环境声与动作音效。duration_seconds 必须足够说完台词并留0.5秒呼吸。保持 shot_number 不变。` },
-      { role: "user", content: `项目：${project.title}\n原始故事：${String(project.source_text ?? "").slice(0, 8000)}\n分镜：${JSON.stringify(shots.map((shot) => ({ shot_number: shot.shot_number, scene: shot.scene, action: shot.action, dialogue: shot.dialogue, sound: shot.sound, duration_seconds: shot.duration_seconds, characters: shot.character_names })))}` },
+      { role: "user", content: `项目：${project.title}\n${previousEpisodeLedger?`上一集结尾精确状态：${previousEpisodeLedger}\n`:""}原始故事：${String(project.source_text ?? "").slice(0, 8000)}\n分镜：${JSON.stringify(shots.map((shot) => ({ shot_number: shot.shot_number, scene: shot.scene, action: shot.action, dialogue: shot.dialogue, sound: shot.sound, duration_seconds: shot.duration_seconds, characters: shot.character_names })))}` },
     ] }) });
     const result = await response.json(); if (!response.ok) throw new Error(result?.error?.message ?? "对白修复失败");
     const polished = parseJson(result?.choices?.[0]?.message?.content ?? "").shots ?? [];
@@ -71,8 +74,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const cleanVideoPrompt = removeContracts(String(current.video_prompt ?? ""));
       const contracts = `\n[DRAMATIC FUNCTION]\n${dramaticFunction}\n[CAUSAL LINK]\n${causalLink}\n[CONTINUITY STATE]\n${state}`;
       const performanceState = { ...currentState, dialogue: String(item.dialogue ?? "").trim(), speaker_name: speakerName || speaker?.name || "" };
-      const imagePrompt = withContinuityPrompt(`${cleanImagePrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "image");
-      const videoPrompt = withContinuityPrompt(`${cleanVideoPrompt}${contracts}`, performanceState, stateShots[shotIndex - 1], stateShots[shotIndex + 1], "video");
+      const previousState=shotIndex===0&&previousEpisodeClosingShot?previousEpisodeClosingShot:stateShots[shotIndex - 1];
+      const imagePrompt = withContinuityPrompt(`${cleanImagePrompt}${contracts}`, performanceState, previousState, stateShots[shotIndex + 1], "image");
+      const videoPrompt = withContinuityPrompt(`${cleanVideoPrompt}${contracts}`, performanceState, previousState, stateShots[shotIndex + 1], "video");
       const promptChanged = imagePrompt !== current.image_prompt || videoPrompt !== current.video_prompt;
       if (promptChanged) upgradedPrompts++;
       const suggestedDuration = Math.min(15, Math.max(2, Number(item.duration_seconds ?? current.duration_seconds)));
@@ -90,7 +94,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const { error } = await supabase.from("storyboard_shots").update(updates).eq("id", current.id).eq("user_id", user.id); if (error) throw error;
     }
     const { data: updated } = await supabase.from("storyboard_shots").select("*").eq("project_id", id).eq("user_id", user.id).order("shot_number");
-    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits, upgradedPrompts, upgradedVoices, invalidatedVisuals });
+    const credits = await finishUsage(user.id, eventId, true); return NextResponse.json({ shots: updated ?? [], credits, upgradedPrompts, upgradedVoices, invalidatedVisuals, crossEpisodeLedgerApplied:Boolean(previousEpisodeLedger) });
   } catch (error) {
     if (eventId) await finishUsage(user.id, eventId, false).catch(() => undefined);
     return NextResponse.json({ error: error instanceof Error ? error.message : "对白修复失败" }, { status: 500 });
