@@ -17,6 +17,7 @@ import { flatPerformanceRun } from "@/app/lib/performanceArc";
 import { resampleMonoPcm16 } from "@/app/lib/audioResampling";
 import { boundedEpisodePlanCount, SERIES_PLAN_COUNTS } from "@/app/lib/seriesPlanning";
 import { buildSeriesPath } from "@/app/lib/seriesNavigation";
+import { productionSummary, seriesProductionSummary } from "@/app/lib/seriesProduction";
 
 type Shot = { id: string; shot_number: number; duration_seconds: number; shot_type: string; camera: string; scene: string; action: string; dialogue: string; sound: string; image_prompt: string; video_prompt: string; image_url?: string; video_url?: string; audio_url?: string; voice_id?: string; voice_language?: string; subtitle_start_ms?: number; subtitle_end_ms?: number; media_status?: string; error_message?: string; character_ids?: string[] | null; character_names?: string[] | null; speaker_character_id?: string | null };
 type Project = { id: string; title: string; created_at: string; character_id?: string; parent_project_id?: string | null; storyboard_shots: Shot[] };
@@ -67,7 +68,9 @@ export default function StoryboardPage() {
   }, [shots, batching]);
 
   async function generate(event: FormEvent) {
-    event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…"); setShots([]);
+    event.preventDefault(); setLoading(true); setStatus("AI 导演正在拆分镜头…");
+    if (currentProjectId) setProjects((current) => current.map((project) => project.id === currentProjectId ? { ...project, storyboard_shots: shots } : project));
+    setShots([]);
     try { const response = await fetch("/api/storyboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, story, shotCount: Number(shotCount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); setShots(data.shots); setCurrentTitle(data.project.title); setCurrentProjectId(data.project.id); setProjects((current) => [{ ...data.project, storyboard_shots: data.shots }, ...current]); const bound = data.shots.filter((shot: Shot) => shot.character_ids?.length).length; const knownNames = new Set(characters.map((character) => character.name.trim().toLocaleLowerCase("zh-CN"))); const missing = new Set<string>(data.shots.flatMap((shot: Shot) => (shot.character_names ?? []).filter((name) => !knownNames.has(name.trim().toLocaleLowerCase("zh-CN"))))); setStatus(`已生成 ${data.shots.length} 个镜头，自动绑定 ${bound} 镜${missing.size ? `，发现 ${missing.size} 个待创建角色` : ""}，剩余 ${data.credits} 积分`); }
     catch (error) { setStatus(error instanceof Error ? error.message : "拆分镜失败"); } finally { setLoading(false); }
   }
@@ -106,6 +109,7 @@ export default function StoryboardPage() {
     if (!currentProjectId || loading) return;
     const episodeCount=boundedEpisodePlanCount(count);
     if (!window.confirm(`AI 将按顺序规划 ${episodeCount} 集完整分镜，预计消耗 ${episodeCount} 积分。本操作只生成剧情和分镜，不会自动生成图片、视频或配音。每一集都会继承前面剧情；中途失败时已成功生成的集数仍会保留。确定继续吗？`)) return;
+    setProjects((current) => current.map((project) => project.id === currentProjectId ? { ...project, storyboard_shots: shots } : project));
     setLoading(true);let completed=0;let parentProjectId=currentProjectId;
     try {
       let remainingCredits:number|undefined;
@@ -405,12 +409,17 @@ export default function StoryboardPage() {
   function sendToStudio(shot: Shot, mode: "image" | "video") { localStorage.setItem("yingdong-studio-draft", JSON.stringify({ prompt: mode === "image" ? shot.image_prompt : shot.video_prompt, mode, shotId: shot.id, projectId: currentProjectId, characterIds: effectiveCharacterIds(shot) })); router.push("/dashboard"); }
 
   function openProject(project: Project) {
+    if (project.id === currentProjectId) return;
+    setProjects((current) => current.map((item) => item.id === currentProjectId ? { ...item, storyboard_shots: shots } : item));
     setShots(project.storyboard_shots.toSorted((a,b) => a.shot_number-b.shot_number));
     setCurrentTitle(project.title); setCurrentProjectId(project.id); setCharacterId(project.character_id || "");
     window.history.replaceState(null, "", `/storyboard?project=${project.id}`);
   }
 
-  const activeSeries = buildSeriesPath(projects,currentProjectId);
+  const projectsWithActiveShots = projects.map((project) => project.id === currentProjectId ? { ...project, storyboard_shots: shots } : project);
+  const activeSeries = buildSeriesPath(projectsWithActiveShots,currentProjectId);
+  const activeSeriesProgress = seriesProductionSummary(activeSeries);
+  const nextIncompleteProject = activeSeries.find((project) => productionSummary(project.storyboard_shots).incomplete > 0);
 
   return <main className="storyboard-page">
     <header className="admin-head"><Link className="wordmark" href="/"><span>影</span><b>影动 AI</b></Link><Link href="/dashboard">返回漫剧工作台</Link></header>
@@ -421,7 +430,7 @@ export default function StoryboardPage() {
         <div className="story-template-picker"><label>爆款题材模板</label><div>{storyTemplates.map((template)=><button type="button" key={template.id} onClick={()=>applyStoryTemplate(template)}>{template.label}</button>)}</div><small>模板已写好人物目标、升级冲突、关键选择、直接后果和结尾钩子，选中后仍可自由修改。</small></div>
         <form className="storyboard-form" onSubmit={generate}><div><label>项目名称</label><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例如：第一章 黑雨"/></div><div><label>镜头数量</label><select value={shotCount} onChange={(e) => setShotCount(e.target.value)}><option value="3">3 个（质量样片）</option><option value="8">8 个</option><option value="12">12 个</option><option value="16">16 个</option><option value="20">20 个</option></select></div><textarea required minLength={30} value={story} onChange={(e) => setStory(e.target.value)} placeholder="粘贴小说章节、剧本或剧情梗概…"/><button disabled={loading}>{loading ? "正在拆分…" : "一键生成分镜"}</button></form>
         {status && <div className="character-status">{status}</div>}
-        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>连续剧集</b><small>共加载 {activeSeries.length} 集 · 当前第 {activeSeries.findIndex((project)=>project.id===currentProjectId)+1} 集</small></div><div>{activeSeries.map((project,index)=><button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集</span><small>{project.title}</small></button>)}</div></nav>}
+        {activeSeries.length > 1 && <nav className="series-navigation" aria-label="连续剧集导航"><div><b>全季制作进度</b><small>{activeSeriesProgress.completedEpisodes}/{activeSeriesProgress.episodes} 集完成 · {activeSeriesProgress.complete}/{activeSeriesProgress.total} 镜完成</small><span className="series-progress"><i style={{width:`${activeSeriesProgress.percent}%`}}/></span>{activeSeriesProgress.failed>0&&<small className="series-failed">{activeSeriesProgress.failed} 镜失败或报错</small>}{nextIncompleteProject&&<button type="button" className="series-next-incomplete" onClick={()=>openProject(nextIncompleteProject)}>定位下一集未完成内容</button>}</div><div>{activeSeries.map((project,index)=>{const progress=productionSummary(project.storyboard_shots);return <button type="button" className={project.id===currentProjectId?"active":undefined} aria-current={project.id===currentProjectId?"page":undefined} key={project.id} onClick={()=>openProject(project)}><span>第 {index+1} 集 · {progress.percent}%</span><small>{project.title}</small><small>{progress.complete}/{progress.total} 镜完成{progress.failed?` · ${progress.failed} 镜失败`:""}</small></button>})}</div></nav>}
         {shots.length > 0 && <div className="shot-section">
           <div className="batch-toolbar">
             <div><label>整集绑定角色</label><select value={characterId} onChange={(e) => void bindCharacter(e.target.value)}><option value="">不绑定角色</option>{characters.map((character) => <option value={character.id} key={character.id}>{character.name} V{character.version}</option>)}</select></div>
