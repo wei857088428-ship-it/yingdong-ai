@@ -1,5 +1,7 @@
+import { primaryPerformanceDirection } from "@/app/lib/performanceArc";
+
 export function expressiveSpeech(dialogue: string, performanceContext: string) {
-  const actorDirection = performanceContext.match(/(?:表演|情绪)\s*[:：]\s*([\s\S]*?)(?=；\s*(?:声音|环境声|动作音效)\s*[:：]|$)/)?.[1]?.trim() || performanceContext;
+  const actorDirection = primaryPerformanceDirection(performanceContext);
   const intensity = Math.min(5, Math.max(1, Number(actorDirection.match(/(?:强度|intensity)\s*[:：]?\s*([1-5])/i)?.[1] ?? 2)));
   const whispering = /耳语|低声|压低声音|气若游丝|屏息|悄声/.test(actorDirection);
   const weak = /微弱|虚弱|重伤|奄奄一息/.test(actorDirection);
